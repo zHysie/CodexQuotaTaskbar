@@ -1,0 +1,37 @@
+#include <windows.h>
+#include "AppVersion.h"
+
+1 RT_MANIFEST "@CQT_MANIFEST_RC_PATH@"
+101 ICON "@CQT_ICON_RC_PATH@"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION CQT_VERSION_COMMA
+ PRODUCTVERSION CQT_VERSION_COMMA
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "CodexQuotaTaskbar\0"
+            VALUE "FileDescription", "Codex quota display for Windows taskbar\0"
+            VALUE "FileVersion", CQT_VERSION_RC
+            VALUE "InternalName", "CodexQuotaTaskbar\0"
+            VALUE "OriginalFilename", "CodexQuotaTaskbar.exe\0"
+            VALUE "ProductName", "CodexQuotaTaskbar\0"
+            VALUE "ProductVersion", CQT_VERSION_RC
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200
+    END
+END

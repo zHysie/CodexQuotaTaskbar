@@ -1,0 +1,10 @@
+{
+  "available_count": 3,
+  "credits": [
+    {"id": "opaque-fixture-c", "status": "available", "expires_at": "2030-03-03T00:00:00Z"},
+    {"id": "opaque-unused", "status": "consumed", "expires_at": "2030-01-01T00:00:00Z"},
+    {"id": "opaque-fixture-a", "status": "available", "expires_at": "2030-01-01T00:00:00Z"},
+    {"id": "opaque-fixture-b", "status": "available", "expires_at": "not-a-date", "unknown": true}
+  ],
+  "new_field": "ignored"
+}

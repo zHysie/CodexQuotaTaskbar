@@ -1,0 +1,7 @@
+{
+  "email": 123,
+  "plan_type": false,
+  "rate_limit": {
+    "primary_window": {"used_percent": 7, "limit_window_seconds": 604800, "reset_after_seconds": 60}
+  }
+}

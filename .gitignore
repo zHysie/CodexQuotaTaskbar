@@ -1,0 +1,11 @@
+/references/
+/build/
+/dist/
+/assets/app-source.png
+/assets/app.png
+/.vs/
+/.claude/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb

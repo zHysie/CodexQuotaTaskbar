@@ -1,0 +1,9 @@
+{
+  "available_count": 4,
+  "credits": [
+    {"status": "available", "expires_at": "2030-01-01T00:00:00.123Z"},
+    {"status": "available", "expires_at": "2030-01-02T08:00:00+08:00"},
+    {"status": "available", "expires_at": 1893628800},
+    {"status": "available", "expires_at": 1893715200000}
+  ]
+}
