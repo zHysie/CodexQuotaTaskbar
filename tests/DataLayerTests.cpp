@@ -72,6 +72,12 @@ void TestUsageParser()
         R"({"rate_limit":{"secondary_window":{"used_percent":0,"limit_window_seconds":18000}}})", 0);
     Check(shortOnly.success && shortOnly.fiveHour.remainingPercent == 100.0 && !shortOnly.weekly.available,
           "usage short only and zero used");
+    const auto overflowingReset = cqt::UsageParser::Parse(
+        R"({"rate_limit":{"secondary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_after_seconds":9223372036854770000}}})",
+        10000);
+    Check(overflowingReset.success && overflowingReset.fiveHour.available
+          && overflowingReset.fiveHour.resetAtUnixSeconds == 0,
+          "usage reset_after overflow is rejected without losing quota data");
 }
 
 void TestResetParser()
@@ -124,6 +130,14 @@ void TestAuthReader()
     result = reader.Read(paths);
     Check(!result.credentials && result.errorCode == "AUTH_ACCESS_TOKEN_MISSING", "auth missing token");
 
+    {
+        std::ofstream oversized(preferred, std::ios::binary | std::ios::trunc);
+        oversized.seekp(static_cast<std::streamoff>(cqt::CodexAuthReader::kMaximumAuthFileBytes));
+        oversized.put('x');
+    }
+    result = reader.Read(paths);
+    Check(!result.credentials && result.errorCode == "AUTH_FILE_TOO_LARGE", "auth oversized file rejected");
+
     std::filesystem::remove_all(root);
 }
 
@@ -143,12 +157,16 @@ void TestHttpPolicy()
     Check(cqt::ClassifyResponse(response) == cqt::HttpResponseClass::TransportFailure, "http timeout");
     response.transportError = cqt::TransportError::ResponseBodyTooLarge;
     Check(cqt::ClassifyResponse(response) == cqt::HttpResponseClass::ResponseTooLarge, "http oversized body");
+    response.transportError = cqt::TransportError::ResponseHeadersTooLarge;
+    Check(cqt::ClassifyResponse(response) == cqt::HttpResponseClass::ResponseTooLarge, "http oversized headers");
 
     Check(cqt::ParseRetryAfterSeconds(L"120", 0).value_or(0) == 120, "retry-after seconds");
     constexpr long long dateEpoch = 784111777; // Sun, 06 Nov 1994 08:49:37 GMT
     Check(cqt::ParseRetryAfterSeconds(L"Sun, 06 Nov 1994 08:49:37 GMT", dateEpoch - 77).value_or(0) == 77,
           "retry-after http date");
     Check(!cqt::ParseRetryAfterSeconds(L"invalid", 0).has_value(), "retry-after invalid");
+    Check(cqt::ParseRetryAfterSeconds(L"999999", 0).value_or(0) == 24 * 60 * 60,
+          "retry-after limited to 24 hours");
     Check(cqt::EffectiveRetryDelaySeconds(60, 120) == 120, "retry-after max with local backoff");
     Check(cqt::UsageBackoffSeconds(1) == 60 && cqt::UsageBackoffSeconds(2) == 120
           && cqt::UsageBackoffSeconds(3) == 300 && cqt::UsageBackoffSeconds(4) == 600,

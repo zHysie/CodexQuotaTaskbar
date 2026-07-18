@@ -41,11 +41,19 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
 
 $output = Join-Path $outputRoot "CodexQuotaTaskbar-v$version-win-x64"
 $archive = "$output.zip"
+$standaloneExecutable = Join-Path $outputRoot "CodexQuotaTaskbar-v$version-win-x64.exe"
+$checksums = Join-Path $outputRoot 'SHA256SUMS.txt'
 if (Test-Path -LiteralPath $output) {
     throw "Package directory already exists: $output"
 }
 if (Test-Path -LiteralPath $archive) {
     throw "Package archive already exists: $archive"
+}
+if (Test-Path -LiteralPath $standaloneExecutable) {
+    throw "Standalone executable already exists: $standaloneExecutable"
+}
+if (Test-Path -LiteralPath $checksums) {
+    throw "Checksum file already exists: $checksums"
 }
 New-Item -ItemType Directory -Path $output | Out-Null
 Copy-Item -LiteralPath $executable -Destination $output
@@ -57,3 +65,14 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'third_party\nlohmann\LICENSE.MIT') 
 Write-Host "Package: $output"
 Compress-Archive -LiteralPath $output -DestinationPath $archive -CompressionLevel Optimal
 Write-Host "Archive: $archive"
+Copy-Item -LiteralPath $executable -Destination $standaloneExecutable
+Write-Host "Standalone executable: $standaloneExecutable"
+$checksumLines = @($archive, $standaloneExecutable) | ForEach-Object {
+    $hash = (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $([System.IO.Path]::GetFileName($_))"
+}
+[System.IO.File]::WriteAllLines(
+    $checksums,
+    $checksumLines,
+    [System.Text.UTF8Encoding]::new($false))
+Write-Host "Checksums: $checksums"

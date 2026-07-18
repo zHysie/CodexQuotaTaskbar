@@ -3,6 +3,7 @@
 #include "ui/TooltipText.h"
 
 #include <cstdio>
+#include <ctime>
 #include <string>
 
 namespace
@@ -38,6 +39,17 @@ cqt::AppState SuccessfulState(long long now)
     return state;
 }
 
+std::wstring ExpectedExpiry(long long unixSeconds)
+{
+    const std::time_t value = static_cast<std::time_t>(unixSeconds);
+    std::tm local{};
+    if (localtime_s(&local, &value) != 0) return L"--";
+    wchar_t buffer[64]{};
+    return std::wcsftime(
+        buffer, std::size(buffer), L"%y/%m/%d %H 时 %M 分", &local)
+        ? buffer : L"--";
+}
+
 } // namespace
 
 int main()
@@ -47,8 +59,8 @@ int main()
     auto state = SuccessfulState(now);
     const std::wstring text = cqt::BuildTooltipText(state, paths, now);
     Check(text.find(L"可用重置：2 次") != std::wstring::npos, "reset count is displayed");
-    Check(text.find(L"到期时间：") != std::wstring::npos, "reset expiry line is displayed");
-    Check(text.find(L"--") != std::wstring::npos, "invalid individual expiry keeps placeholder");
+    Check(text.find(L"最早到期：--") != std::wstring::npos,
+          "unknown reset expiry prevents a misleading earliest time");
     Check(text.find(L"下次刷新") == std::wstring::npos, "next refresh countdown is omitted");
     Check(text == cqt::BuildTooltipText(state, paths, now + 1),
           "tooltip text remains stable between minute boundaries");
@@ -58,12 +70,26 @@ int main()
           "active refresh state remains visible");
 
     state = SuccessfulState(now);
+    state.lastSuccessfulResetCredits.availableCount = 3;
+    state.lastSuccessfulResetCredits.availableCredits = {
+        {true, now + 172800},
+        {true, now + 86400},
+        {true, now + 259200}};
+    state.latestResetCreditsAttempt = state.lastSuccessfulResetCredits;
+    const std::wstring earliest = cqt::BuildTooltipText(state, paths, now);
+    Check(earliest.find(L"最早到期：" + ExpectedExpiry(now + 86400)) != std::wstring::npos,
+          "only the earliest reset expiry is displayed with local date and minute precision");
+    Check(earliest.find(ExpectedExpiry(now + 172800)) == std::wstring::npos
+          && earliest.find(ExpectedExpiry(now + 259200)) == std::wstring::npos,
+          "later reset expiries are omitted");
+
+    state = SuccessfulState(now);
     state.lastSuccessfulResetCredits.availableCount = 0;
     state.lastSuccessfulResetCredits.availableCredits.clear();
     state.latestResetCreditsAttempt = state.lastSuccessfulResetCredits;
     const std::wstring zero = cqt::BuildTooltipText(state, paths, now);
     Check(zero.find(L"可用重置：0 次") != std::wstring::npos
-          && zero.find(L"到期时间：") == std::wstring::npos,
+          && zero.find(L"最早到期：") == std::wstring::npos,
           "zero reset credits omit empty expiry line");
 
     state = SuccessfulState(now);

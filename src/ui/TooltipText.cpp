@@ -2,8 +2,8 @@
 
 #include <cmath>
 #include <ctime>
+#include <optional>
 #include <sstream>
-#include <vector>
 
 namespace
 {
@@ -104,24 +104,28 @@ std::wstring BuildTooltipText(
         {
             const auto& reset = state.lastSuccessfulResetCredits;
             int available = 0;
-            std::vector<std::wstring> dates;
+            std::optional<long long> earliestExpiry;
+            bool hasUnknownExpiry = false;
             for (const auto& credit : reset.availableCredits)
             {
                 if (credit.hasValidExpiry && credit.expiresAtUnixSeconds <= nowUnixSeconds) continue;
                 ++available;
-                dates.push_back(credit.hasValidExpiry
-                    ? FormatLocalTime(credit.expiresAtUnixSeconds, L"%x") : L"--");
+                if (!credit.hasValidExpiry)
+                {
+                    hasUnknownExpiry = true;
+                    continue;
+                }
+                if (!earliestExpiry || credit.expiresAtUnixSeconds < *earliestExpiry)
+                    earliestExpiry = credit.expiresAtUnixSeconds;
             }
             tooltip << L"可用重置：" << available << L" 次\r\n";
             if (available > 0)
             {
-                tooltip << L"到期时间：";
-                for (std::size_t index = 0; index < dates.size(); ++index)
-                {
-                    if (index > 0) tooltip << (index % 4 == 0 ? L"\r\n" : L"、");
-                    tooltip << dates[index];
-                }
-                tooltip << L"\r\n";
+                tooltip << L"最早到期："
+                        << (!hasUnknownExpiry && earliestExpiry
+                                ? FormatLocalTime(*earliestExpiry, L"%y/%m/%d %H 时 %M 分")
+                                : L"--")
+                        << L"\r\n";
             }
             if (!state.latestResetCreditsAttempt.success
                 && !state.latestResetCreditsAttempt.errorCode.empty())

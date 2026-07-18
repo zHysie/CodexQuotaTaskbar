@@ -23,12 +23,23 @@ const double* Number(const cqt::JsonValue* value)
 bool ToNonNegativeSeconds(const cqt::JsonValue* value, long long& output)
 {
     const double* number = Number(value);
+    constexpr double kLongLongExclusiveUpperBound = 9223372036854775808.0;
     if (!number || !std::isfinite(*number) || *number < 0.0
-        || *number > static_cast<double>(std::numeric_limits<long long>::max()))
+        || *number >= kLongLongExclusiveUpperBound)
     {
         return false;
     }
     output = static_cast<long long>(*number);
+    return true;
+}
+
+bool AddSecondsWithoutOverflow(long long base, long long delta, long long& output)
+{
+    if (base < 0 || delta < 0 || delta > std::numeric_limits<long long>::max() - base)
+    {
+        return false;
+    }
+    output = base + delta;
     return true;
 }
 
@@ -61,7 +72,8 @@ bool ParseWindow(const cqt::JsonValue& value, long long receivedAt, Candidate& c
     if (!ToNonNegativeSeconds(value.Find("reset_at"), parsed.resetAtUnixSeconds)
         && parsed.resetAfterSeconds > 0)
     {
-        parsed.resetAtUnixSeconds = receivedAt + parsed.resetAfterSeconds;
+        static_cast<void>(AddSecondsWithoutOverflow(
+            receivedAt, parsed.resetAfterSeconds, parsed.resetAtUnixSeconds));
     }
     candidate.window = parsed;
     candidate.shortTerm = duration <= kTwelveHours;
