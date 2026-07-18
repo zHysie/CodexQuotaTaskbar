@@ -16,7 +16,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           persist-credentials: false
       - name: Configure
@@ -29,9 +29,12 @@ jobs:
         shell: pwsh
         run: .\tools\package.ps1
       - name: Upload package
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: CodexQuotaTaskbar-win-x64
-          path: dist/*.zip
+          path: |
+            dist/*.zip
+            dist/*.exe
+            dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
