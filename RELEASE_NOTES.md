@@ -28,6 +28,6 @@
 
 ## 安装
 
-下载 `CodexQuotaTaskbar-v0.1.1-win-x64.zip`，核对 Release 页面中的 SHA-256，解压后运行 `CodexQuotaTaskbar.exe`。目标电脑需安装 Microsoft Visual C++ 2015–2022 x64 运行库。
+可直接下载 `CodexQuotaTaskbar-v0.1.1-win-x64.exe`，也可以下载 `CodexQuotaTaskbar-v0.1.1-win-x64.zip` 后解压运行。请核对 Release 页面中的 SHA-256。目标电脑需安装 Microsoft Visual C++ 2015–2026 x64 运行库。
 
-发布包包含正式 EXE、README、发行说明、MIT License、第三方声明和 nlohmann/json MIT License，不包含凭证、账号数据、响应转储、测试固件、参考仓库或构建缓存。
+完整发布包包含正式 EXE、README、发行说明、MIT License、第三方声明和 nlohmann/json MIT License，不包含凭证、账号数据、响应转储、测试固件、参考仓库或构建缓存。
