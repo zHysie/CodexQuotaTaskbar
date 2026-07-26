@@ -21,6 +21,19 @@ struct ExternalWindowObstacle
     std::wstring className;
 };
 
+struct TaskbarShellSignature
+{
+    HWND taskbar = nullptr;
+    HWND rebar = nullptr;
+    HWND taskSwitch = nullptr;
+    HWND notificationArea = nullptr;
+    RECT taskbarRect{};
+    RECT rebarRect{};
+    RECT taskSwitchRect{};
+    RECT notificationRect{};
+    UINT dpi = 96;
+};
+
 struct TaskbarProbeResult
 {
     bool supported = false;
@@ -34,6 +47,7 @@ struct TaskbarProbeResult
     LONG rightmostOccupied = 0;
     std::vector<OccupiedElement> occupiedElements;
     std::vector<ExternalWindowObstacle> externalObstacles;
+    TaskbarShellSignature shellSignature{};
     std::wstring reason;
 };
 
@@ -49,6 +63,14 @@ public:
     bool Attach(HWND childWindow, const TaskbarProbeResult& probe, std::wstring& error,
                 LONG desiredWidthDip = 84) const;
     bool ValidatePlacement(HWND childWindow, const TaskbarProbeResult& probe, std::wstring& error) const;
+    bool RefreshExternalLayout(TaskbarProbeResult& probe) const;
+    bool HasLightweightStructureChanged(const TaskbarProbeResult& probe) const;
+    bool IsForegroundFullscreen(const TaskbarProbeResult& probe) const;
+    bool RepositionWithinSafeRect(
+        HWND childWindow,
+        const TaskbarProbeResult& probe,
+        std::wstring& error,
+        LONG desiredWidthDip = 84) const;
     bool ExternalLayoutChanged(const TaskbarProbeResult& probe) const;
     [[nodiscard]] bool StartEventMonitoring(
         HWND notificationWindow,
@@ -70,6 +92,7 @@ private:
         DWORD eventTime);
     void HandleWinEvent(DWORD event, HWND window, LONG objectId, LONG childId) const;
     static HWND FindDescendantByClass(HWND parent, const wchar_t* className);
+    static bool CaptureShellSignature(HWND taskbar, TaskbarShellSignature& signature);
     static bool IsInteractiveControlType(int controlType);
     static bool RectInside(const RECT& inner, const RECT& outer, LONG tolerance = 0);
 

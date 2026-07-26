@@ -37,6 +37,36 @@ bool Intersects(const RECT& left, const RECT& right)
     return IntersectRect(&intersection, &left, &right) != FALSE;
 }
 
+cqt::RectangleEdges ToRectangleEdges(const RECT& rect)
+{
+    return {rect.left, rect.top, rect.right, rect.bottom};
+}
+
+bool NativeRectsApproximatelyEqual(const RECT& left, const RECT& right, LONG tolerance)
+{
+    return cqt::RectanglesApproximatelyEqual(
+        ToRectangleEdges(left), ToRectangleEdges(right), tolerance);
+}
+
+bool IsWindowCloaked(HWND window)
+{
+    using DwmGetWindowAttributeFunction = HRESULT(WINAPI*)(HWND, DWORD, PVOID, DWORD);
+    static const auto getWindowAttribute = []() -> DwmGetWindowAttributeFunction
+    {
+        HMODULE module = LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        return module
+            ? reinterpret_cast<DwmGetWindowAttributeFunction>(
+                GetProcAddress(module, "DwmGetWindowAttribute"))
+            : nullptr;
+    }();
+
+    constexpr DWORD dwmWindowAttributeCloaked = 14;
+    DWORD cloaked = 0;
+    return getWindowAttribute
+        && SUCCEEDED(getWindowAttribute(window, dwmWindowAttributeCloaked, &cloaked, sizeof(cloaked)))
+        && cloaked != 0;
+}
+
 std::wstring FormatRect(const RECT& rect)
 {
     std::wostringstream output;
@@ -86,6 +116,7 @@ struct ExternalWindowContext
 {
     RECT taskbarRect{};
     RECT baseSafeRect{};
+    RECT monitorRect{};
     DWORD taskbarProcessId = 0;
     UINT dpi = 96;
     std::vector<cqt::ExternalWindowObstacle>* obstacles = nullptr;
@@ -94,36 +125,33 @@ struct ExternalWindowContext
 BOOL CALLBACK CollectExternalWindow(HWND window, LPARAM parameter)
 {
     auto* context = reinterpret_cast<ExternalWindowContext*>(parameter);
-    if (!context || !context->obstacles || !IsWindowVisible(window)) return TRUE;
+    if (!context || !context->obstacles) return TRUE;
 
     DWORD processId = 0;
     GetWindowThreadProcessId(window, &processId);
-    if (processId == 0 || processId == context->taskbarProcessId || processId == GetCurrentProcessId())
-        return TRUE;
 
     RECT rect{};
     if (!GetWindowRect(window, &rect)) return TRUE;
-    const LONG width = RectWidth(rect);
-    const LONG height = RectHeight(rect);
-    const LONG taskbarHeight = RectHeight(context->taskbarRect);
     const LONG minimumExtent = std::max<LONG>(8, MulDiv(12, context->dpi, 96));
     const LONG maximumWidth = std::max<LONG>(
         RectWidth(context->baseSafeRect), MulDiv(640, context->dpi, 96));
-    if (width < minimumExtent || height < minimumExtent
-        || height > taskbarHeight * 2 || width > maximumWidth)
-        return TRUE;
-
-    RECT taskbarIntersection{};
-    RECT safeIntersection{};
-    if (!IntersectRect(&taskbarIntersection, &rect, &context->taskbarRect)
-        || RectHeight(taskbarIntersection) < std::max<LONG>(8, taskbarHeight / 4)
-        || !IntersectRect(&safeIntersection, &rect, &context->baseSafeRect)
-        || RectWidth(safeIntersection) < minimumExtent)
-        return TRUE;
 
     const std::wstring className = WindowClassName(window);
-    if (className == L"CodexQuotaTaskbar.Display"
-        || className == L"CodexQuotaTaskbar.Prototype.Display")
+    const cqt::ExternalWindowCandidate candidate{
+        ToRectangleEdges(rect),
+        ToRectangleEdges(context->taskbarRect),
+        ToRectangleEdges(context->baseSafeRect),
+        ToRectangleEdges(context->monitorRect),
+        GetAncestor(window, GA_ROOT) == window,
+        IsWindowVisible(window) != FALSE,
+        IsWindowCloaked(window),
+        processId == 0 || processId == context->taskbarProcessId
+            || processId == GetCurrentProcessId(),
+        cqt::IsExcludedExternalWindowClass(className),
+        minimumExtent,
+        maximumWidth,
+        std::max<LONG>(2, MulDiv(2, context->dpi, 96))};
+    if (!cqt::IsExternalObstacleCandidate(candidate))
         return TRUE;
 
     context->obstacles->push_back({rect, processId, className});
@@ -135,13 +163,22 @@ bool ApplyExternalObstacles(cqt::TaskbarProbeResult& result)
     result.externalObstacles.clear();
     DWORD taskbarProcessId = 0;
     GetWindowThreadProcessId(result.taskbar, &taskbarProcessId);
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    const HMONITOR monitor = MonitorFromWindow(result.taskbar, MONITOR_DEFAULTTONULL);
+    if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo))
+    {
+        SetRectEmpty(&result.safeRect);
+        return false;
+    }
     ExternalWindowContext context{
         result.taskbarRect,
         result.baseSafeRect,
+        monitorInfo.rcMonitor,
         taskbarProcessId,
         result.dpi,
         &result.externalObstacles};
-    EnumChildWindows(GetDesktopWindow(), CollectExternalWindow, reinterpret_cast<LPARAM>(&context));
+    EnumWindows(CollectExternalWindow, reinterpret_cast<LPARAM>(&context));
 
     std::vector<cqt::HorizontalInterval> intervals;
     intervals.reserve(result.externalObstacles.size());
@@ -164,6 +201,24 @@ bool ApplyExternalObstacles(cqt::TaskbarProbeResult& result)
         selected->right,
         result.baseSafeRect.bottom};
     return true;
+}
+
+bool ShellSignaturesApproximatelyEqual(
+    const cqt::TaskbarShellSignature& left,
+    const cqt::TaskbarShellSignature& right,
+    LONG tolerance)
+{
+    if (left.taskbar != right.taskbar
+        || left.rebar != right.rebar
+        || left.taskSwitch != right.taskSwitch
+        || left.notificationArea != right.notificationArea
+        || left.dpi != right.dpi)
+        return false;
+
+    // These child HWNDs are structural, but their rectangles are soft safety
+    // boundaries: task buttons, tray content and TrafficMonitor can resize them
+    // without Explorer rebuilding the taskbar.
+    return NativeRectsApproximatelyEqual(left.taskbarRect, right.taskbarRect, tolerance);
 }
 
 void AppendWindowTree(HWND parent, int depth, std::wostringstream& output)
@@ -376,6 +431,33 @@ HWND TaskbarHost::FindDescendantByClass(HWND parent, const wchar_t* className)
     return search.result;
 }
 
+bool TaskbarHost::CaptureShellSignature(HWND taskbar, TaskbarShellSignature& signature)
+{
+    signature = {};
+    if (!IsWindow(taskbar) || !GetWindowRect(taskbar, &signature.taskbarRect))
+        return false;
+
+    signature.taskbar = taskbar;
+    signature.dpi = GetDpiForWindow(taskbar);
+    if (signature.dpi == 0) signature.dpi = 96;
+    signature.rebar = FindDescendantByClass(taskbar, L"ReBarWindow32");
+    signature.taskSwitch = FindDescendantByClass(taskbar, L"MSTaskSwWClass");
+    signature.notificationArea = FindDescendantByClass(taskbar, L"TrayNotifyWnd");
+
+    const auto captureOptionalRect = [](HWND& window, RECT& rect)
+    {
+        if (!window || !IsWindow(window) || !GetWindowRect(window, &rect))
+        {
+            window = nullptr;
+            SetRectEmpty(&rect);
+        }
+    };
+    captureOptionalRect(signature.rebar, signature.rebarRect);
+    captureOptionalRect(signature.taskSwitch, signature.taskSwitchRect);
+    captureOptionalRect(signature.notificationArea, signature.notificationRect);
+    return signature.notificationArea != nullptr;
+}
+
 bool TaskbarHost::IsInteractiveControlType(int controlType)
 {
     switch (controlType)
@@ -439,8 +521,14 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
         result.dpi = 96;
     }
 
-    result.notificationArea = FindDescendantByClass(result.taskbar, L"TrayNotifyWnd");
-    if (!result.notificationArea || !GetWindowRect(result.notificationArea, &result.notificationRect)
+    if (!CaptureShellSignature(result.taskbar, result.shellSignature))
+    {
+        result.reason = L"无法读取任务栏轻量结构签名。";
+        return result;
+    }
+    result.notificationArea = result.shellSignature.notificationArea;
+    result.notificationRect = result.shellSignature.notificationRect;
+    if (!result.notificationArea
         || !RectInside(result.notificationRect, result.taskbarRect, 2))
     {
         result.reason = L"无法可靠识别任务栏通知区域。";
@@ -635,20 +723,250 @@ bool TaskbarHost::ValidatePlacement(
     }
 
     RECT childRect{};
+    const LONG tolerance = std::max<LONG>(2, MulDiv(2, probe.dpi, 96));
     if (!GetWindowRect(childWindow, &childRect)
-        || !RectInside(childRect, probe.taskbarRect, 2)
-        || !RectInside(childRect, probe.safeRect, 2))
+        || !RectInside(childRect, probe.taskbarRect, tolerance)
+        || !RectInside(childRect, probe.baseSafeRect, tolerance))
     {
         error = L"额度窗口不再位于已验证的任务栏安全空白区。";
         return false;
     }
 
-    if (childRect.right > probe.notificationRect.left)
+    if (childRect.right > probe.notificationRect.left + tolerance)
     {
         error = L"额度窗口与任务栏通知区域发生重叠。";
         return false;
     }
 
+    std::vector<HorizontalInterval> occupied;
+    occupied.reserve(probe.externalObstacles.size());
+    for (const auto& obstacle : probe.externalObstacles)
+        occupied.push_back({obstacle.rect.left, obstacle.rect.right});
+    const LONG margin = MulDiv(8, probe.dpi, 96);
+    if (!IsIntervalFree(
+            {childRect.left, childRect.right},
+            {probe.baseSafeRect.left - tolerance, probe.baseSafeRect.right + tolerance},
+            occupied,
+            std::max(0L, margin - tolerance)))
+    {
+        error = L"额度窗口与第三方任务栏窗口的安全间距发生碰撞。";
+        return false;
+    }
+
+    return true;
+}
+
+bool TaskbarHost::RefreshExternalLayout(TaskbarProbeResult& probe) const
+{
+    if (!probe.supported || !IsWindow(probe.taskbar))
+    {
+        probe.reason = L"主任务栏宿主已经失效。";
+        return false;
+    }
+
+    TaskbarShellSignature currentSignature;
+    if (!CaptureShellSignature(probe.taskbar, currentSignature))
+    {
+        probe.reason = L"无法读取任务栏轻量结构签名。";
+        return false;
+    }
+    const LONG tolerance = std::max<LONG>(2, MulDiv(2, probe.dpi, 96));
+    if (!ShellSignaturesApproximatelyEqual(probe.shellSignature, currentSignature, tolerance))
+    {
+        probe.reason = L"任务栏结构或 DPI 已发生变化，需要重新探测。";
+        return false;
+    }
+
+    if (!RectInside(currentSignature.notificationRect, currentSignature.taskbarRect, tolerance))
+    {
+        probe.reason = L"任务栏通知区域已离开主任务栏边界。";
+        return false;
+    }
+    const auto bandRight = [](const TaskbarShellSignature& signature) -> LONG
+    {
+        const RECT& band = signature.rebar
+            ? signature.rebarRect
+            : signature.taskSwitchRect;
+        return band.right;
+    };
+    // Windows 11 centers the task-button band by default, so its width can
+    // change twice as much as its occupied right edge. Track the actual right
+    // edge delta; this also remains correct for a left-aligned taskbar.
+    const long long adjustedRightmost = std::clamp<long long>(
+        static_cast<long long>(probe.rightmostOccupied)
+            + bandRight(currentSignature) - bandRight(probe.shellSignature),
+        currentSignature.taskbarRect.left,
+        currentSignature.notificationRect.left);
+
+    probe.notificationArea = currentSignature.notificationArea;
+    probe.notificationRect = currentSignature.notificationRect;
+    probe.shellSignature.notificationRect = currentSignature.notificationRect;
+    const LONG margin = MulDiv(8, probe.dpi, 96);
+    const LONG minimumWidth = MulDiv(68, probe.dpi, 96);
+    probe.baseSafeRect.left = static_cast<LONG>(adjustedRightmost) + margin;
+    probe.baseSafeRect.right = probe.notificationRect.left - margin;
+    if (RectWidth(probe.baseSafeRect) < minimumWidth)
+    {
+        SetRectEmpty(&probe.safeRect);
+        probe.reason = L"任务栏任务按钮与通知区域之间没有足够的连续安全空白。";
+        return false;
+    }
+
+    if (!ApplyExternalObstacles(probe))
+    {
+        probe.reason = L"第三方任务栏悬浮窗口之后没有足够的连续安全空白。";
+        return false;
+    }
+    probe.reason.clear();
+    return true;
+}
+
+bool TaskbarHost::HasLightweightStructureChanged(const TaskbarProbeResult& probe) const
+{
+    if (!probe.supported || !IsWindow(probe.taskbar)) return true;
+    TaskbarShellSignature currentSignature;
+    if (!CaptureShellSignature(probe.taskbar, currentSignature)) return true;
+    const LONG tolerance = std::max<LONG>(2, MulDiv(2, probe.dpi, 96));
+    return !ShellSignaturesApproximatelyEqual(probe.shellSignature, currentSignature, tolerance);
+}
+
+bool TaskbarHost::IsForegroundFullscreen(const TaskbarProbeResult& probe) const
+{
+    if (!IsWindow(probe.taskbar)) return false;
+    HWND foreground = GetForegroundWindow();
+    if (!foreground) return false;
+    foreground = GetAncestor(foreground, GA_ROOT);
+    if (!foreground || foreground == probe.taskbar || !IsWindowVisible(foreground)
+        || IsWindowCloaked(foreground))
+        return false;
+
+    DWORD processId = 0;
+    GetWindowThreadProcessId(foreground, &processId);
+    if (processId == 0 || processId == GetCurrentProcessId()) return false;
+
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
+    const HMONITOR monitor = MonitorFromWindow(probe.taskbar, MONITOR_DEFAULTTONULL);
+    RECT foregroundRect{};
+    if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo)
+        || !GetWindowRect(foreground, &foregroundRect))
+        return false;
+
+    const LONG tolerance = std::max<LONG>(2, MulDiv(2, probe.dpi, 96));
+    return RectangleCovers(
+        ToRectangleEdges(foregroundRect),
+        ToRectangleEdges(monitorInfo.rcMonitor),
+        tolerance);
+}
+
+bool TaskbarHost::RepositionWithinSafeRect(
+    HWND childWindow,
+    const TaskbarProbeResult& probe,
+    std::wstring& error,
+    LONG desiredWidthDip) const
+{
+    if (!probe.supported || !IsWindow(childWindow) || !IsWindow(probe.taskbar)
+        || GetParent(childWindow) != probe.taskbar)
+    {
+        error = L"额度窗口已失去主任务栏父窗口。";
+        return false;
+    }
+
+    RECT childRect{};
+    if (!GetWindowRect(childWindow, &childRect))
+    {
+        error = L"无法读取额度窗口位置。";
+        return false;
+    }
+
+    const LONG tolerance = std::max<LONG>(2, MulDiv(2, probe.dpi, 96));
+    std::wstring validationError;
+    if (ValidatePlacement(childWindow, probe, validationError))
+    {
+        error.clear();
+        return true;
+    }
+
+    const LONG minimumWidth = MulDiv(68, probe.dpi, 96);
+    const LONG desiredWidth = std::max<LONG>(1, MulDiv(desiredWidthDip, probe.dpi, 96));
+    const LONG currentWidth = RectWidth(childRect) > 0 ? RectWidth(childRect) : desiredWidth;
+    std::vector<HorizontalInterval> occupied;
+    occupied.reserve(probe.externalObstacles.size());
+    for (const auto& obstacle : probe.externalObstacles)
+        occupied.push_back({obstacle.rect.left, obstacle.rect.right});
+    const auto horizontal = SelectNearestFreeInterval(
+        {probe.baseSafeRect.left, probe.baseSafeRect.right},
+        std::move(occupied),
+        MulDiv(8, probe.dpi, 96),
+        minimumWidth,
+        {childRect.left, childRect.left + currentWidth});
+    if (!horizontal)
+    {
+        error = L"任务栏空间不足，无法安全放置额度窗口。";
+        return false;
+    }
+
+    LONG height = RectHeight(childRect);
+    if (height <= 0)
+    {
+        const LONG verticalMargin = MulDiv(3, probe.dpi, 96);
+        height = std::max<LONG>(1, RectHeight(probe.taskbarRect) - verticalMargin * 2);
+    }
+    height = std::min(height, RectHeight(probe.baseSafeRect));
+    if (height <= 0)
+    {
+        error = L"任务栏安全区域高度无效。";
+        return false;
+    }
+
+    LONG width = horizontal->right - horizontal->left;
+    if (RectWidth(childRect) <= 0)
+        width = std::min(desiredWidth, RectWidth(probe.baseSafeRect));
+    if (width < minimumWidth)
+    {
+        error = L"任务栏空间不足，无法安全放置额度窗口。";
+        return false;
+    }
+
+    const LONG maximumTop = probe.baseSafeRect.bottom - height;
+    const LONG top = std::clamp(childRect.top, probe.baseSafeRect.top, maximumTop);
+    RECT targetRect{horizontal->left, top, horizontal->left + width, top + height};
+    if (NativeRectsApproximatelyEqual(childRect, targetRect, tolerance))
+    {
+        error.clear();
+        return true;
+    }
+
+    POINT points[2]{{targetRect.left, targetRect.top}, {targetRect.right, targetRect.bottom}};
+    SetLastError(ERROR_SUCCESS);
+    if (MapWindowPoints(HWND_DESKTOP, probe.taskbar, points, 2) == 0
+        && GetLastError() != ERROR_SUCCESS)
+    {
+        error = L"无法把屏幕坐标转换为任务栏客户区坐标。";
+        return false;
+    }
+    if (!SetWindowPos(
+            childWindow,
+            nullptr,
+            points[0].x,
+            points[0].y,
+            points[1].x - points[0].x,
+            points[1].y - points[0].y,
+            SWP_NOACTIVATE | SWP_NOZORDER))
+    {
+        error = L"无法在任务栏安全空白区原位调整额度窗口。";
+        return false;
+    }
+
+    if (!ValidatePlacement(childWindow, probe, validationError))
+    {
+        error = validationError.empty()
+            ? L"原位调整后额度窗口仍未进入安全区域。"
+            : validationError;
+        return false;
+    }
+
+    error.clear();
     return true;
 }
 
@@ -656,8 +974,9 @@ bool TaskbarHost::ExternalLayoutChanged(const TaskbarProbeResult& probe) const
 {
     if (!probe.supported || !IsWindow(probe.taskbar)) return true;
     TaskbarProbeResult current = probe;
-    if (!ApplyExternalObstacles(current)) return true;
-    return EqualRect(&current.safeRect, &probe.safeRect) == FALSE;
+    if (!RefreshExternalLayout(current)) return true;
+    const LONG tolerance = std::max<LONG>(2, MulDiv(2, probe.dpi, 96));
+    return !NativeRectsApproximatelyEqual(current.safeRect, probe.safeRect, tolerance);
 }
 
 std::wstring TaskbarHost::DpiAwarenessName(DPI_AWARENESS_CONTEXT context)
