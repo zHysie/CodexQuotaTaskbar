@@ -78,6 +78,7 @@ try {
     Write-Host "Application: $(Join-Path $buildRoot 'Release\CodexQuotaTaskbar.exe')"
     Write-Host "Built: $(Join-Path $buildRoot 'Release\CodexQuotaTaskbarPrototype.exe')"
     Write-Host "Probe: $(Join-Path $buildRoot 'Release\TaskbarProbe.exe')"
+    Write-Host "Stability probe: $(Join-Path $buildRoot 'Release\TaskbarStabilityProbe.exe')"
     Write-Host "Interaction probe: $(Join-Path $buildRoot 'Release\TaskbarInteractionProbe.exe')"
     Write-Host "Lifecycle probe: $(Join-Path $buildRoot 'Release\AppLifecycleProbe.exe')"
 }

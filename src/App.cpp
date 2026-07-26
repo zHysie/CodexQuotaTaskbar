@@ -12,6 +12,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <ctime>
 
 namespace
@@ -27,6 +28,32 @@ constexpr ULONGLONG kRetryReattachDelay = 3000;
 constexpr int kMaximumReattachAttempts = 3;
 
 long long UnixNow() { return static_cast<long long>(std::time(nullptr)); }
+
+LONG GeometryTolerance(UINT dpi)
+{
+    return std::max<LONG>(1, MulDiv(2, dpi == 0 ? 96 : dpi, 96));
+}
+
+bool RectApproximatelyEqual(const RECT& left, const RECT& right, LONG tolerance)
+{
+    return std::abs(left.left - right.left) <= tolerance
+        && std::abs(left.top - right.top) <= tolerance
+        && std::abs(left.right - right.right) <= tolerance
+        && std::abs(left.bottom - right.bottom) <= tolerance;
+}
+
+bool IsTaskbarTemporarilyHidden(HWND taskbar, const RECT& taskbarRect, UINT dpi)
+{
+    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    const HMONITOR monitor = MonitorFromWindow(taskbar, MONITOR_DEFAULTTONEAREST);
+    if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo)) return false;
+
+    RECT intersection{};
+    if (!IntersectRect(&intersection, &taskbarRect, &monitorInfo.rcMonitor)) return true;
+
+    const LONG visibleHeight = intersection.bottom - intersection.top;
+    return visibleHeight <= GeometryTolerance(dpi);
+}
 
 } // namespace
 
@@ -138,15 +165,15 @@ LRESULT App::HandleControllerMessage(HWND window, UINT message, WPARAM wParam, L
     switch (message)
     {
     case kQuotaUpdated: ApplyRefreshResult(); return 0;
-    case kTaskbarStructureChanged: RequestReattach(); return 0;
+    case kTaskbarStructureChanged: RequestSoftValidation(); return 0;
     case WM_TIMER:
         if (wParam == kCountdownTimer) { UpdatePresentation(); return 0; }
         if (wParam == kValidationTimer) { ValidateHost(); return 0; }
         break;
-    case WM_DISPLAYCHANGE: RequestReattach(); return 0;
+    case WM_DISPLAYCHANGE: RequestSoftValidation(); return 0;
     case WM_SETTINGCHANGE: UpdatePresentation(); return 0;
     case WM_POWERBROADCAST:
-        if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND) RequestReattach();
+        if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND) RequestSoftValidation();
         return TRUE;
     case WM_CLOSE: BeginShutdown(); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -176,6 +203,7 @@ bool App::AttachToTaskbar(std::wstring& error)
         return false;
     }
     currentProbe_ = probe;
+    ResetHostValidationState();
     return true;
 }
 
@@ -183,15 +211,39 @@ void App::RequestReattach()
 {
     if (shuttingDown_ || reattachPending_) return;
     reattachPending_ = true;
+    ResetHostValidationState();
     host_.StopEventMonitoring();
     nextReattachAttempt_ = GetTickCount64() + kInitialReattachDelay;
     reattachAttempts_ = 0;
     if (taskbarWindow_.Window()) ShowWindow(taskbarWindow_.Window(), SW_HIDE);
 }
 
+void App::RequestSoftValidation()
+{
+    if (shuttingDown_) return;
+    softValidationPending_ = true;
+    if (controller_) SetTimer(controller_, kValidationTimer, 250, nullptr);
+}
+
+void App::ResetHostValidationState()
+{
+    softValidationPending_ = false;
+    structuralChangeSamples_ = 0;
+    externalCollisionState_ = {};
+    nextExternalCollisionSample_ = 0;
+    structuralCandidateValid_ = false;
+    structuralTaskbarCandidate_ = {};
+    structuralDpiCandidate_ = 0;
+}
+
 void App::ValidateHost()
 {
     if (shuttingDown_) return;
+    if (softValidationPending_)
+    {
+        softValidationPending_ = false;
+        if (controller_) SetTimer(controller_, kValidationTimer, 2000, nullptr);
+    }
     if (reattachPending_)
     {
         const ULONGLONG now = GetTickCount64();
@@ -216,22 +268,124 @@ void App::ValidateHost()
         return;
     }
 
-    RECT taskbarRect{};
-    RECT notificationRect{};
-    std::wstring error;
-    if (!taskbarWindow_.Window() || !IsWindow(taskbarWindow_.Window())
-        || !IsWindow(currentProbe_.taskbar)
-        || !GetWindowRect(currentProbe_.taskbar, &taskbarRect)
-        || !EqualRect(&taskbarRect, &currentProbe_.taskbarRect)
-        || !IsWindow(currentProbe_.notificationArea)
-        || !GetWindowRect(currentProbe_.notificationArea, &notificationRect)
-        || !EqualRect(&notificationRect, &currentProbe_.notificationRect)
-        || GetDpiForWindow(currentProbe_.taskbar) != currentProbe_.dpi
-        || host_.ExternalLayoutChanged(currentProbe_)
-        || !host_.ValidatePlacement(taskbarWindow_.Window(), currentProbe_, error))
+    const HWND display = taskbarWindow_.Window();
+    if (!display || !IsWindow(display) || !IsWindow(currentProbe_.taskbar)
+        || GetParent(display) != currentProbe_.taskbar)
     {
         RequestReattach();
+        return;
     }
+
+    if (host_.IsForegroundFullscreen(currentProbe_))
+    {
+        // Full-screen games and capture overlays can temporarily reshape or hide
+        // Shell surfaces. Keep the existing child and let its taskbar parent own
+        // visibility; only the background quota state continues to update.
+        softValidationPending_ = true;
+        structuralChangeSamples_ = 0;
+        externalCollisionState_ = {};
+        nextExternalCollisionSample_ = 0;
+        structuralCandidateValid_ = false;
+        return;
+    }
+
+    RECT taskbarRect{};
+    RECT notificationRect{};
+    const bool hasTaskbarRect = GetWindowRect(currentProbe_.taskbar, &taskbarRect) != FALSE;
+    const bool hasNotificationRect = IsWindow(currentProbe_.notificationArea)
+        && GetWindowRect(currentProbe_.notificationArea, &notificationRect) != FALSE;
+    if (hasTaskbarRect
+        && IsTaskbarTemporarilyHidden(currentProbe_.taskbar, taskbarRect, currentProbe_.dpi))
+    {
+        // Explorer owns the child visibility while an auto-hidden taskbar is
+        // off-screen. Keep the existing HWND and baseline so it slides back in
+        // with the same parent and coordinates when Explorer restores it.
+        softValidationPending_ = true;
+        structuralChangeSamples_ = 0;
+        externalCollisionState_ = {};
+        nextExternalCollisionSample_ = 0;
+        structuralCandidateValid_ = false;
+        return;
+    }
+
+    const UINT currentDpi = GetDpiForWindow(currentProbe_.taskbar);
+    const LONG tolerance = GeometryTolerance(currentProbe_.dpi);
+    const bool structureChanged = !hasTaskbarRect || !hasNotificationRect
+        || currentDpi != currentProbe_.dpi
+        || !RectApproximatelyEqual(taskbarRect, currentProbe_.taskbarRect, tolerance)
+        || host_.HasLightweightStructureChanged(currentProbe_);
+    if (structureChanged)
+    {
+        // A structural sample interrupts the external-obstacle sequence. Do
+        // not let collision confirmations survive across a different layout.
+        externalCollisionState_ = {};
+        nextExternalCollisionSample_ = 0;
+        const bool sameCandidate = structuralCandidateValid_
+            && currentDpi == structuralDpiCandidate_
+            && RectApproximatelyEqual(taskbarRect, structuralTaskbarCandidate_, tolerance);
+        if (sameCandidate)
+        {
+            ++structuralChangeSamples_;
+        }
+        else
+        {
+            structuralCandidateValid_ = true;
+            structuralTaskbarCandidate_ = taskbarRect;
+            structuralDpiCandidate_ = currentDpi;
+            structuralChangeSamples_ = 1;
+        }
+        if (structuralChangeSamples_ >= 2) RequestReattach();
+        return;
+    }
+
+    structuralChangeSamples_ = 0;
+    structuralCandidateValid_ = false;
+    softValidationPending_ = false;
+
+    TaskbarProbeResult externalSample = currentProbe_;
+    const bool hasSafeSpace = host_.RefreshExternalLayout(externalSample);
+    std::wstring placementError;
+    if (hasSafeSpace && host_.ValidatePlacement(display, externalSample, placementError))
+    {
+        // Accept the latest obstacle snapshot, but keep the existing rectangle.
+        // An expanded gap is not a reason to jump back toward the tray.
+        currentProbe_ = std::move(externalSample);
+        externalCollisionState_ = {};
+        nextExternalCollisionSample_ = 0;
+        return;
+    }
+
+    const ULONGLONG collisionSampleTime = GetTickCount64();
+    if (collisionSampleTime < nextExternalCollisionSample_) return;
+    nextExternalCollisionSample_ = collisionSampleTime + 2000;
+    const std::optional<HorizontalInterval> sampledSafeInterval = hasSafeSpace
+        ? std::optional<HorizontalInterval>{{externalSample.safeRect.left, externalSample.safeRect.right}}
+        : std::nullopt;
+    const StableCollisionDecision collisionDecision = ObserveCollisionSample(
+        true, sampledSafeInterval, tolerance, 3, externalCollisionState_);
+    if (collisionDecision != StableCollisionDecision::Confirmed) return;
+
+    externalCollisionState_ = {};
+    nextExternalCollisionSample_ = 0;
+    if (!hasSafeSpace)
+    {
+        ShowWindow(display, SW_HIDE);
+        ShowError(
+            externalSample.reason.empty()
+                ? L"第三方任务栏窗口之后没有足够的连续安全空白。"
+                : externalSample.reason,
+            true);
+        return;
+    }
+
+    if (!host_.RepositionWithinSafeRect(display, externalSample, placementError, kTaskbarDisplayWidthDip))
+    {
+        ShowError(
+            placementError.empty() ? L"无法在任务栏安全空白区稳定定位额度窗口。" : placementError,
+            true);
+        return;
+    }
+    currentProbe_ = std::move(externalSample);
 }
 
 void App::HandleContextMenu(int x, int y)

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(CodexQuotaTaskbar VERSION 0.1.1 LANGUAGES CXX RC)
+project(CodexQuotaTaskbar VERSION 0.1.2 LANGUAGES CXX RC)
 
 enable_testing()
 
@@ -179,6 +179,16 @@ target_compile_definitions(AppLifecycleProbe PRIVATE
 )
 target_link_libraries(AppLifecycleProbe PRIVATE user32)
 
+add_executable(TaskbarStabilityProbe
+    src/stability_probe.cpp
+    ${CQT_GENERATED_RC}
+)
+target_compile_features(TaskbarStabilityProbe PRIVATE cxx_std_20)
+target_compile_definitions(TaskbarStabilityProbe PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
+)
+target_link_libraries(TaskbarStabilityProbe PRIVATE user32 shell32)
+
 add_executable(QuotaLayoutTests
     tests/QuotaLayoutTests.cpp
     src/ui/QuotaLayout.h
@@ -249,7 +259,7 @@ target_link_libraries(ProductionLogicTests PRIVATE data_core advapi32)
 add_test(NAME ProductionLogicTests COMMAND ProductionLogicTests)
 
 if(MSVC)
-    foreach(target data_core taskbar_core CodexQuotaTaskbar CodexQuotaTaskbarPrototype TaskbarProbe TaskbarInteractionProbe AppLifecycleProbe QuotaLayoutTests TaskbarWindowTests TaskbarCollisionTests TooltipTextTests DataLayerTests ProductionLogicTests)
+    foreach(target data_core taskbar_core CodexQuotaTaskbar CodexQuotaTaskbarPrototype TaskbarProbe TaskbarInteractionProbe AppLifecycleProbe TaskbarStabilityProbe QuotaLayoutTests TaskbarWindowTests TaskbarCollisionTests TooltipTextTests DataLayerTests ProductionLogicTests)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
     endforeach()
     target_link_options(CodexQuotaTaskbarPrototype PRIVATE /MANIFEST:NO)
@@ -257,6 +267,7 @@ if(MSVC)
     target_link_options(TaskbarProbe PRIVATE /MANIFEST:NO)
     target_link_options(TaskbarInteractionProbe PRIVATE /MANIFEST:NO)
     target_link_options(AppLifecycleProbe PRIVATE /MANIFEST:NO)
+    target_link_options(TaskbarStabilityProbe PRIVATE /MANIFEST:NO)
 endif()
 
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT CodexQuotaTaskbar)

@@ -2,6 +2,7 @@
 
 #include "common/SingleInstanceGuard.h"
 #include "settings/Settings.h"
+#include "taskbar/TaskbarCollision.h"
 #include "taskbar/TaskbarHost.h"
 #include "taskbar/TaskbarWindow.h"
 #include "usage/AuthFileWatcher.h"
@@ -28,7 +29,9 @@ private:
     [[nodiscard]] bool RegisterControllerClass();
     [[nodiscard]] bool AttachToTaskbar(std::wstring& error);
     void RequestReattach();
+    void RequestSoftValidation();
     void ValidateHost();
+    void ResetHostValidationState();
     void HandleContextMenu(int x, int y);
     void HandleCommand(UINT command);
     void ApplyRefreshResult();
@@ -46,8 +49,15 @@ private:
     bool shuttingDown_ = false;
     bool errorShown_ = false;
     bool reattachPending_ = false;
+    bool softValidationPending_ = false;
     ULONGLONG nextReattachAttempt_ = 0;
+    ULONGLONG nextExternalCollisionSample_ = 0;
     int reattachAttempts_ = 0;
+    int structuralChangeSamples_ = 0;
+    StableCollisionState externalCollisionState_;
+    bool structuralCandidateValid_ = false;
+    RECT structuralTaskbarCandidate_{};
+    UINT structuralDpiCandidate_ = 0;
     SettingsData settings_;
     std::filesystem::path settingsPath_;
     AppState state_;
