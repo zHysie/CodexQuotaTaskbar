@@ -139,6 +139,39 @@ int main()
             == cqt::StableCollisionDecision::Confirmed,
         "three consecutive no-space samples are confirmed");
 
+    cqt::StableReclaimState reclaimState;
+    Check(
+        cqt::ObserveStableReclaimSample(
+            true, {{400, 480}}, 2, 1000, 1000, reclaimState)
+            == cqt::StableReclaimDecision::Pending,
+        "tray contraction starts a delayed right-position reclaim");
+    Check(
+        cqt::ObserveStableReclaimSample(
+            true, {{401, 481}}, 2, 1999, 1000, reclaimState)
+            == cqt::StableReclaimDecision::Pending,
+        "approximately stable reclaim target waits for the full delay");
+    Check(
+        cqt::ObserveStableReclaimSample(
+            true, {{400, 480}}, 2, 2000, 1000, reclaimState)
+            == cqt::StableReclaimDecision::Confirmed,
+        "stable tray contraction confirms right-position reclaim after one second");
+    Check(
+        cqt::ObserveStableReclaimSample(
+            false, {{400, 480}}, 2, 2250, 1000, reclaimState)
+            == cqt::StableReclaimDecision::Clear
+            && !reclaimState.stableSince && !reclaimState.lastTargetInterval,
+        "lost reclaim opportunity clears the delayed reclaim state");
+
+    cqt::StableReclaimState changedReclaimState;
+    static_cast<void>(cqt::ObserveStableReclaimSample(
+        true, {{400, 480}}, 2, 1000, 1000, changedReclaimState));
+    Check(
+        cqt::ObserveStableReclaimSample(
+            true, {{404, 484}}, 2, 1900, 1000, changedReclaimState)
+            == cqt::StableReclaimDecision::Pending
+            && changedReclaimState.stableSince == 1900,
+        "moving reclaim target restarts the stability delay");
+
     auto candidate = NormalExternalCandidate();
     Check(cqt::IsExternalObstacleCandidate(candidate), "visible top-level taskbar widget is retained");
     candidate.topLevel = false;

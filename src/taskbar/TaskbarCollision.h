@@ -146,6 +146,19 @@ struct StableCollisionState
     std::optional<HorizontalInterval> lastSafeInterval;
 };
 
+enum class StableReclaimDecision
+{
+    Clear,
+    Pending,
+    Confirmed,
+};
+
+struct StableReclaimState
+{
+    std::optional<unsigned long long> stableSince;
+    std::optional<HorizontalInterval> lastTargetInterval;
+};
+
 inline StableCollisionDecision ObserveCollisionSample(
     bool collides,
     std::optional<HorizontalInterval> safeInterval,
@@ -174,6 +187,39 @@ inline StableCollisionDecision ObserveCollisionSample(
     return state.consecutiveSamples >= requiredSamples
         ? StableCollisionDecision::Confirmed
         : StableCollisionDecision::Pending;
+}
+
+inline StableReclaimDecision ObserveStableReclaimSample(
+    bool canReclaim,
+    std::optional<HorizontalInterval> targetInterval,
+    long tolerance,
+    unsigned long long now,
+    unsigned long long requiredStableMilliseconds,
+    StableReclaimState& state)
+{
+    if (!canReclaim || !targetInterval)
+    {
+        state = {};
+        return StableReclaimDecision::Clear;
+    }
+
+    tolerance = std::max(0L, tolerance);
+    const bool sameTarget = state.lastTargetInterval
+        && CoordinateNear(targetInterval->left, state.lastTargetInterval->left, tolerance)
+        && CoordinateNear(targetInterval->right, state.lastTargetInterval->right, tolerance);
+    if (!sameTarget || !state.stableSince || now < *state.stableSince)
+    {
+        state.stableSince = now;
+        state.lastTargetInterval = targetInterval;
+        return requiredStableMilliseconds == 0
+            ? StableReclaimDecision::Confirmed
+            : StableReclaimDecision::Pending;
+    }
+
+    state.lastTargetInterval = targetInterval;
+    return now - *state.stableSince >= requiredStableMilliseconds
+        ? StableReclaimDecision::Confirmed
+        : StableReclaimDecision::Pending;
 }
 
 inline std::optional<HorizontalInterval> ClampIntervalToSafeArea(

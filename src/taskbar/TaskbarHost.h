@@ -71,6 +71,11 @@ public:
         const TaskbarProbeResult& probe,
         std::wstring& error,
         LONG desiredWidthDip = 84) const;
+    bool RepositionToRightmostSafeRect(
+        HWND childWindow,
+        const TaskbarProbeResult& probe,
+        std::wstring& error,
+        LONG desiredWidthDip = 84) const;
     bool ExternalLayoutChanged(const TaskbarProbeResult& probe) const;
     [[nodiscard]] bool StartEventMonitoring(
         HWND notificationWindow,

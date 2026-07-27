@@ -28,13 +28,13 @@
 
 ### 方式一：直接下载 EXE
 
-1. 点击 [直接下载 `CodexQuotaTaskbar-v0.1.2-win-x64.exe`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.2/CodexQuotaTaskbar-v0.1.2-win-x64.exe)。
+1. 点击 [直接下载 `CodexQuotaTaskbar-v0.1.3-win-x64.exe`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.3/CodexQuotaTaskbar-v0.1.3-win-x64.exe)。
 2. 将下载的 EXE 保存或移动到一个固定目录。
 3. 双击运行，程序会直接出现在主任务栏中。
 
 ### 方式二：下载完整压缩包
 
-1. 下载 [`CodexQuotaTaskbar-v0.1.2-win-x64.zip`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.2/CodexQuotaTaskbar-v0.1.2-win-x64.zip)。
+1. 下载 [`CodexQuotaTaskbar-v0.1.3-win-x64.zip`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.3/CodexQuotaTaskbar-v0.1.3-win-x64.zip)。
 2. 解压到固定目录，不要直接在压缩包内运行。
 3. 双击解压后的 `CodexQuotaTaskbar.exe`。
 
@@ -42,7 +42,7 @@
 
 运行环境：Windows 11 x64，目标电脑需安装 Microsoft Visual C++ 2015–2026 x64 运行库。
 
-v0.1.2 暂无安装器、自动更新和代码签名。Windows 可能显示“未知发布者”或 SmartScreen 提示，请只从本仓库 Release 下载并核对 SHA-256。
+v0.1.3 暂无安装器、自动更新和代码签名。Windows 可能显示“未知发布者”或 SmartScreen 提示，请只从本仓库 Release 下载并核对 SHA-256。
 
 ## 使用说明
 
@@ -56,6 +56,8 @@ v0.1.2 暂无安装器、自动更新和代码签名。Windows 可能显示“�
 悬停会显示额度重置倒计时、可用重置次数及最早到期时间（本地时间，精确到分钟）、账号、套餐和最后成功更新时间；其余到期时间不展开。左键无操作；右键可立即刷新、切换显示模式、选择显示项目、修改刷新间隔和颜色、设置开机启动、重新检测任务栏或退出。
 
 全屏游戏、浏览器全屏或截图遮罩出现时，程序暂停任务栏软布局调整，不销毁额度窗口，也不改变其位置；后台额度刷新仍继续。任务栏由系统自动隐藏时，额度窗口随任务栏隐藏，恢复后由同一个窗口在原位置出现。TrafficMonitor 等外部任务栏工具短暂显隐或缩小时不会让额度窗口向右跳动；只有连续 3 次、每次间隔 2 秒都确认真实碰撞时，才使用同一个窗口向左避让。
+
+麦克风等系统状态按钮使通知区临时变宽时，额度窗口仍会安全避让；按钮消失、通知区收缩后，最右安全位置连续稳定 1 秒即使用同一 HWND 自动复位。TrafficMonitor 等外部顶层工具消失仍不会触发向右回抢。
 
 升级时先退出软件，再解压并覆盖原文件。卸载时先关闭“开机启动”并退出，然后删除程序目录；如需同时清除设置，可删除 `%APPDATA%\CodexQuotaTaskbar\`。
 
@@ -76,6 +78,8 @@ https://chatgpt.com/backend-api/wham/rate-limit-reset-credits
 这两个地址属于未公开后端接口，没有长期稳定性承诺；上游接口变化时，部分额度可能暂时显示为 `--%`。
 
 ## 支持范围与已知限制
+
+v0.1.3 已完成 CTest 6/6、碰撞测试 32/32，并由用户在真实桌面确认麦克风状态按钮出现时安全避让、消失后约 1 秒自动复位且 HWND 保持不变。其余支持范围继续沿用下述 v0.1.2 已验证基线，未重新执行的组合不扩大承诺。
 
 v0.1.2 已在 Windows build `10.0.26200.8894`、100% DPI、单显示器 2560×1440、底部任务栏环境完成 VS2022 x64 Release、CTest 6/6、碰撞测试 27/27、任务栏探针、交互探针 21/21 和生命周期探针验证。自动全屏、PrintScreen、真实截图遮罩与 Edge F11 各完成 10/10 轮；TrafficMonitor 连续 300 秒 9662 个样本及任务按钮增减 18 秒 580 个样本的 HWND、父子关系、坐标和可见性异常计数均为 0。
 

@@ -970,6 +970,113 @@ bool TaskbarHost::RepositionWithinSafeRect(
     return true;
 }
 
+bool TaskbarHost::RepositionToRightmostSafeRect(
+    HWND childWindow,
+    const TaskbarProbeResult& probe,
+    std::wstring& error,
+    LONG desiredWidthDip) const
+{
+    if (!probe.supported || !IsWindow(childWindow) || !IsWindow(probe.taskbar)
+        || GetParent(childWindow) != probe.taskbar)
+    {
+        error = L"额度窗口已失去主任务栏父窗口。";
+        return false;
+    }
+
+    RECT childRect{};
+    if (!GetWindowRect(childWindow, &childRect))
+    {
+        error = L"无法读取额度窗口位置。";
+        return false;
+    }
+
+    const LONG minimumWidth = MulDiv(68, probe.dpi, 96);
+    const LONG desiredWidth = std::max<LONG>(1, MulDiv(desiredWidthDip, probe.dpi, 96));
+    LONG width = RectWidth(childRect) > 0 ? RectWidth(childRect) : desiredWidth;
+    width = std::min(width, RectWidth(probe.safeRect));
+    if (width < minimumWidth)
+    {
+        error = L"任务栏空间不足，无法恢复最右安全位置。";
+        return false;
+    }
+
+    LONG height = RectHeight(childRect);
+    if (height <= 0)
+    {
+        const LONG verticalMargin = MulDiv(3, probe.dpi, 96);
+        height = std::max<LONG>(1, RectHeight(probe.taskbarRect) - verticalMargin * 2);
+    }
+    height = std::min(height, RectHeight(probe.baseSafeRect));
+    if (height <= 0)
+    {
+        error = L"任务栏安全区域高度无效。";
+        return false;
+    }
+
+    const LONG maximumTop = probe.baseSafeRect.bottom - height;
+    const LONG top = std::clamp(childRect.top, probe.baseSafeRect.top, maximumTop);
+    RECT targetRect{
+        probe.safeRect.right - width,
+        top,
+        probe.safeRect.right,
+        top + height};
+    const LONG tolerance = std::max<LONG>(2, MulDiv(2, probe.dpi, 96));
+    if (NativeRectsApproximatelyEqual(childRect, targetRect, tolerance))
+    {
+        error.clear();
+        return true;
+    }
+
+    POINT points[2]{{targetRect.left, targetRect.top}, {targetRect.right, targetRect.bottom}};
+    SetLastError(ERROR_SUCCESS);
+    if (MapWindowPoints(HWND_DESKTOP, probe.taskbar, points, 2) == 0
+        && GetLastError() != ERROR_SUCCESS)
+    {
+        error = L"无法把屏幕坐标转换为任务栏客户区坐标。";
+        return false;
+    }
+    if (!SetWindowPos(
+            childWindow,
+            nullptr,
+            points[0].x,
+            points[0].y,
+            points[1].x - points[0].x,
+            points[1].y - points[0].y,
+            SWP_NOACTIVATE | SWP_NOZORDER))
+    {
+        error = L"无法恢复任务栏最右安全位置。";
+        return false;
+    }
+
+    std::wstring validationError;
+    if (!ValidatePlacement(childWindow, probe, validationError))
+    {
+        POINT originalPoints[2]{
+            {childRect.left, childRect.top},
+            {childRect.right, childRect.bottom}};
+        SetLastError(ERROR_SUCCESS);
+        if (MapWindowPoints(HWND_DESKTOP, probe.taskbar, originalPoints, 2) != 0
+            || GetLastError() == ERROR_SUCCESS)
+        {
+            static_cast<void>(SetWindowPos(
+                childWindow,
+                nullptr,
+                originalPoints[0].x,
+                originalPoints[0].y,
+                originalPoints[1].x - originalPoints[0].x,
+                originalPoints[1].y - originalPoints[0].y,
+                SWP_NOACTIVATE | SWP_NOZORDER));
+        }
+        error = validationError.empty()
+            ? L"恢复后额度窗口未进入最右安全位置。"
+            : validationError;
+        return false;
+    }
+
+    error.clear();
+    return true;
+}
+
 bool TaskbarHost::ExternalLayoutChanged(const TaskbarProbeResult& probe) const
 {
     if (!probe.supported || !IsWindow(probe.taskbar)) return true;
