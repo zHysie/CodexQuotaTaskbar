@@ -25,6 +25,9 @@ constexpr UINT kQuotaUpdated = WM_APP + 1;
 constexpr UINT kTaskbarStructureChanged = WM_APP + 2;
 constexpr ULONGLONG kInitialReattachDelay = 1500;
 constexpr ULONGLONG kRetryReattachDelay = 3000;
+constexpr UINT kNormalValidationInterval = 2000;
+constexpr UINT kFastValidationInterval = 250;
+constexpr ULONGLONG kTrayReclaimStableDelay = 1000;
 constexpr int kMaximumReattachAttempts = 3;
 
 long long UnixNow() { return static_cast<long long>(std::time(nullptr)); }
@@ -117,7 +120,7 @@ int App::Run(HINSTANCE instance)
     }
 
     SetTimer(controller_, kCountdownTimer, 1000, nullptr);
-    SetTimer(controller_, kValidationTimer, 2000, nullptr);
+    SetTimer(controller_, kValidationTimer, kNormalValidationInterval, nullptr);
     refreshController_.Start(authPaths_, settings_.refreshIntervalSeconds,
         [this] { if (controller_) PostMessageW(controller_, kQuotaUpdated, 0, 0); });
     static_cast<void>(authWatcher_.Start(authPaths_, [this] { refreshController_.NotifyCredentialsChanged(); }));
@@ -222,7 +225,7 @@ void App::RequestSoftValidation()
 {
     if (shuttingDown_) return;
     softValidationPending_ = true;
-    if (controller_) SetTimer(controller_, kValidationTimer, 250, nullptr);
+    if (controller_) SetTimer(controller_, kValidationTimer, kFastValidationInterval, nullptr);
 }
 
 void App::ResetHostValidationState()
@@ -230,6 +233,8 @@ void App::ResetHostValidationState()
     softValidationPending_ = false;
     structuralChangeSamples_ = 0;
     externalCollisionState_ = {};
+    trayReclaimState_ = {};
+    trayReclaimArmed_ = false;
     nextExternalCollisionSample_ = 0;
     structuralCandidateValid_ = false;
     structuralTaskbarCandidate_ = {};
@@ -242,7 +247,7 @@ void App::ValidateHost()
     if (softValidationPending_)
     {
         softValidationPending_ = false;
-        if (controller_) SetTimer(controller_, kValidationTimer, 2000, nullptr);
+        if (controller_) SetTimer(controller_, kValidationTimer, kNormalValidationInterval, nullptr);
     }
     if (reattachPending_)
     {
@@ -284,6 +289,8 @@ void App::ValidateHost()
         softValidationPending_ = true;
         structuralChangeSamples_ = 0;
         externalCollisionState_ = {};
+        trayReclaimState_ = {};
+        trayReclaimArmed_ = false;
         nextExternalCollisionSample_ = 0;
         structuralCandidateValid_ = false;
         return;
@@ -303,6 +310,8 @@ void App::ValidateHost()
         softValidationPending_ = true;
         structuralChangeSamples_ = 0;
         externalCollisionState_ = {};
+        trayReclaimState_ = {};
+        trayReclaimArmed_ = false;
         nextExternalCollisionSample_ = 0;
         structuralCandidateValid_ = false;
         return;
@@ -319,6 +328,8 @@ void App::ValidateHost()
         // A structural sample interrupts the external-obstacle sequence. Do
         // not let collision confirmations survive across a different layout.
         externalCollisionState_ = {};
+        trayReclaimState_ = {};
+        trayReclaimArmed_ = false;
         nextExternalCollisionSample_ = 0;
         const bool sameCandidate = structuralCandidateValid_
             && currentDpi == structuralDpiCandidate_
@@ -347,12 +358,85 @@ void App::ValidateHost()
     std::wstring placementError;
     if (hasSafeSpace && host_.ValidatePlacement(display, externalSample, placementError))
     {
-        // Accept the latest obstacle snapshot, but keep the existing rectangle.
-        // An expanded gap is not a reason to jump back toward the tray.
+        // A temporary system indicator (for example the microphone button) can
+        // expand TrayNotifyWnd and push us left. Once that system-owned boundary
+        // contracts, reclaim the rightmost position only after the target has
+        // stayed unchanged for a while. External obstacle removal alone does not
+        // arm this path, so TrafficMonitor-style widgets still cannot make us
+        // bounce right.
+        if (externalSample.notificationRect.left
+            > currentProbe_.notificationRect.left + tolerance)
+        {
+            trayReclaimArmed_ = true;
+            trayReclaimState_ = {};
+        }
+        else if (externalSample.notificationRect.left
+            < currentProbe_.notificationRect.left - tolerance)
+        {
+            trayReclaimArmed_ = false;
+            trayReclaimState_ = {};
+        }
+
+        RECT childRect{};
+        std::optional<HorizontalInterval> reclaimTarget;
+        bool canReclaim = false;
+        if (trayReclaimArmed_ && GetWindowRect(display, &childRect))
+        {
+            const LONG childWidth = childRect.right - childRect.left;
+            if (childWidth > 0 && externalSample.safeRect.right - externalSample.safeRect.left >= childWidth)
+            {
+                reclaimTarget = HorizontalInterval{
+                    externalSample.safeRect.right - childWidth,
+                    externalSample.safeRect.right};
+                canReclaim = reclaimTarget->left > childRect.left + tolerance;
+            }
+        }
+
+        const StableReclaimDecision reclaimDecision = ObserveStableReclaimSample(
+            canReclaim,
+            reclaimTarget,
+            tolerance,
+            GetTickCount64(),
+            kTrayReclaimStableDelay,
+            trayReclaimState_);
+        if (reclaimDecision == StableReclaimDecision::Confirmed)
+        {
+            // Reclaim is optional: if the light-weight move races with another
+            // Shell change, retain the already-valid placement and retry only
+            // after a future notification-area contraction.
+            static_cast<void>(host_.RepositionToRightmostSafeRect(
+                display, externalSample, placementError, kTaskbarDisplayWidthDip));
+            trayReclaimArmed_ = false;
+            trayReclaimState_ = {};
+            if (controller_)
+                SetTimer(controller_, kValidationTimer, kNormalValidationInterval, nullptr);
+        }
+        else if (reclaimDecision == StableReclaimDecision::Clear)
+        {
+            trayReclaimArmed_ = false;
+            if (controller_)
+                SetTimer(controller_, kValidationTimer, kNormalValidationInterval, nullptr);
+        }
+        else if (controller_)
+        {
+            // Poll quickly only while a system-notification recovery target is
+            // being confirmed. Normal steady-state validation remains 2 seconds.
+            SetTimer(controller_, kValidationTimer, kFastValidationInterval, nullptr);
+        }
+
+        // Accept the latest obstacle snapshot while retaining the current HWND.
         currentProbe_ = std::move(externalSample);
         externalCollisionState_ = {};
         nextExternalCollisionSample_ = 0;
         return;
+    }
+
+    if (trayReclaimArmed_ || trayReclaimState_.stableSince)
+    {
+        trayReclaimArmed_ = false;
+        trayReclaimState_ = {};
+        if (controller_)
+            SetTimer(controller_, kValidationTimer, kNormalValidationInterval, nullptr);
     }
 
     const ULONGLONG collisionSampleTime = GetTickCount64();
@@ -366,6 +450,8 @@ void App::ValidateHost()
     if (collisionDecision != StableCollisionDecision::Confirmed) return;
 
     externalCollisionState_ = {};
+    trayReclaimState_ = {};
+    trayReclaimArmed_ = false;
     nextExternalCollisionSample_ = 0;
     if (!hasSafeSpace)
     {

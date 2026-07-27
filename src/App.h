@@ -55,6 +55,8 @@ private:
     int reattachAttempts_ = 0;
     int structuralChangeSamples_ = 0;
     StableCollisionState externalCollisionState_;
+    StableReclaimState trayReclaimState_;
+    bool trayReclaimArmed_ = false;
     bool structuralCandidateValid_ = false;
     RECT structuralTaskbarCandidate_{};
     UINT structuralDpiCandidate_ = 0;
