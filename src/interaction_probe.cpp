@@ -1,6 +1,8 @@
 #include <windows.h>
 #include <commctrl.h>
 
+#include "ui/ContextMenu.h"
+
 #include <chrono>
 #include <cstdio>
 #include <iterator>
@@ -82,6 +84,7 @@ struct WindowSearch
     DWORD processId = 0;
     DWORD threadId = 0;
     const wchar_t* className = nullptr;
+    bool visibleOnly = false;
     HWND found = nullptr;
 };
 
@@ -92,7 +95,8 @@ BOOL CALLBACK FindProcessWindow(HWND window, LPARAM parameter)
     const DWORD threadId = GetWindowThreadProcessId(window, &processId);
     if ((search.processId == 0 || search.processId == processId)
         && (search.threadId == 0 || search.threadId == threadId)
-        && ClassEquals(window, search.className))
+        && ClassEquals(window, search.className)
+        && (!search.visibleOnly || IsWindowVisible(window)))
     {
         search.found = window;
         return FALSE;
@@ -100,9 +104,13 @@ BOOL CALLBACK FindProcessWindow(HWND window, LPARAM parameter)
     return TRUE;
 }
 
-HWND FindTopLevelProcessWindow(DWORD processId, DWORD threadId, const wchar_t* className)
+HWND FindTopLevelProcessWindow(
+    DWORD processId,
+    DWORD threadId,
+    const wchar_t* className,
+    bool visibleOnly = false)
 {
-    WindowSearch search{processId, threadId, className, nullptr};
+    WindowSearch search{processId, threadId, className, visibleOnly, nullptr};
     EnumWindows(FindProcessWindow, reinterpret_cast<LPARAM>(&search));
     if (!search.found && threadId != 0)
     {
@@ -125,6 +133,18 @@ bool SendWithTimeout(HWND window, UINT message, WPARAM wParam, LPARAM lParam, DW
         != 0;
 }
 
+bool SendMouseClick(POINT point)
+{
+    if (!SetCursorPos(point.x, point.y)) return false;
+    INPUT input[2]{};
+    input[0].type = INPUT_MOUSE;
+    input[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    input[1].type = INPUT_MOUSE;
+    input[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    return SendInput(static_cast<UINT>(std::size(input)), input, sizeof(INPUT))
+        == static_cast<UINT>(std::size(input));
+}
+
 template <typename Predicate>
 bool WaitUntil(std::chrono::milliseconds timeout, Predicate predicate)
 {
@@ -140,11 +160,283 @@ bool WaitUntil(std::chrono::milliseconds timeout, Predicate predicate)
     return predicate();
 }
 
+struct SingleLabelMenuState
+{
+    bool found = false;
+    bool enabled = false;
+    bool checked = false;
+    std::wstring text;
+};
+
+bool CancelMenu(HWND display, DWORD processId);
+
+bool OpenSubmenu(
+    HWND display,
+    DWORD processId,
+    std::wstring_view submenuText,
+    HWND& menuWindow,
+    HMENU& submenu,
+    RECT& rootItemRect)
+{
+    if (!CancelMenu(display, processId)) return false;
+    RECT displayRect{};
+    if (!GetWindowRect(display, &displayRect)) return false;
+    const POINT point{displayRect.left + 2, displayRect.top + 2};
+    if (!PostMessageW(
+            display,
+            WM_CONTEXTMENU,
+            reinterpret_cast<WPARAM>(display),
+            MAKELPARAM(point.x, point.y)))
+    {
+        return false;
+    }
+
+    menuWindow = nullptr;
+    if (!WaitUntil(std::chrono::milliseconds(2000), [&]() {
+            menuWindow = FindTopLevelProcessWindow(processId, 0, L"#32768", true);
+            return menuWindow != nullptr;
+        }))
+    {
+        return false;
+    }
+
+    // MN_GETHMENU is the menu-window query used by Windows menu/accessibility
+    // implementations even though the Windows SDK headers do not expose it.
+    constexpr UINT kMenuGetHandle = 0x01E1;
+    DWORD_PTR menuResult = 0;
+    if (!SendWithTimeout(menuWindow, kMenuGetHandle, 0, 0, menuResult) || menuResult == 0)
+        return false;
+    const HMENU rootMenu = reinterpret_cast<HMENU>(menuResult);
+    const int itemCount = GetMenuItemCount(rootMenu);
+    wchar_t itemText[128]{};
+    submenu = nullptr;
+    for (int index = 0; index < itemCount; ++index)
+    {
+        itemText[0] = L'\0';
+        GetMenuStringW(rootMenu, static_cast<UINT>(index), itemText,
+                       static_cast<int>(std::size(itemText)), MF_BYPOSITION);
+        if (submenuText == itemText)
+        {
+            submenu = GetSubMenu(rootMenu, index);
+            if (!submenu
+                || !GetMenuItemRect(
+                    nullptr, rootMenu, static_cast<UINT>(index), &rootItemRect))
+            {
+                submenu = nullptr;
+            }
+            break;
+        }
+    }
+    return submenu != nullptr;
+}
+
+SingleLabelMenuState ReadSingleLabelMenuState(HMENU contentMenu)
+{
+    SingleLabelMenuState state;
+    wchar_t text[128]{};
+    MENUITEMINFOW item{sizeof(item)};
+    item.fMask = MIIM_STATE | MIIM_STRING;
+    item.dwTypeData = text;
+    item.cch = static_cast<UINT>(std::size(text));
+    state.found = GetMenuItemInfoW(
+        contentMenu, cqt::CommandShowSingleQuotaLabel, FALSE, &item) != FALSE;
+    if (state.found)
+    {
+        state.enabled = (item.fState & (MFS_DISABLED | MFS_GRAYED)) == 0;
+        state.checked = (item.fState & MFS_CHECKED) != 0;
+        state.text = text;
+    }
+    return state;
+}
+
+bool CancelMenu(HWND display, DWORD processId)
+{
+    HWND menuWindow = FindTopLevelProcessWindow(processId, 0, L"#32768", true);
+    if (!menuWindow) return true;
+    PostMessageW(menuWindow, WM_CANCELMODE, 0, 0);
+    PostMessageW(display, WM_CANCELMODE, 0, 0);
+    if (!WaitUntil(std::chrono::milliseconds(250), [&]() {
+            return FindTopLevelProcessWindow(processId, 0, L"#32768", true) == nullptr;
+        }))
+    {
+        RECT displayRect{};
+        POINT originalCursor{};
+        const bool cursorRead = GetCursorPos(&originalCursor) != FALSE;
+        if (GetWindowRect(display, &displayRect))
+        {
+            SendMouseClick(POINT{
+                (displayRect.left + displayRect.right) / 2,
+                (displayRect.top + displayRect.bottom) / 2,
+            });
+        }
+        if (cursorRead) SetCursorPos(originalCursor.x, originalCursor.y);
+    }
+    return WaitUntil(std::chrono::milliseconds(2000), [&]() {
+        return FindTopLevelProcessWindow(processId, 0, L"#32768", true) == nullptr;
+    });
+}
+
+int RunSingleLabelMenuStateProbe(bool expectedEnabled, bool expectedChecked)
+{
+    const HWND display = FindDisplayWindow();
+    if (!display)
+    {
+        std::wprintf(L"[FAIL] 未找到任务栏额度子窗口\n");
+        return 2;
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(display, &processId);
+    HWND menuWindow = nullptr;
+    HMENU contentMenu = nullptr;
+    RECT contentRootItemRect{};
+    if (!OpenSubmenu(
+            display,
+            processId,
+            L"显示内容",
+            menuWindow,
+            contentMenu,
+            contentRootItemRect))
+    {
+        CancelMenu(display, processId);
+        std::wprintf(L"[FAIL] 无法打开或读取显示内容菜单\n");
+        return 2;
+    }
+    const SingleLabelMenuState state = ReadSingleLabelMenuState(contentMenu);
+    const bool menuClosed = CancelMenu(display, processId);
+    const bool passed = state.found
+        && state.text == L"单项时显示标识（5h / 1W）"
+        && state.enabled == expectedEnabled
+        && state.checked == expectedChecked
+        && menuClosed;
+    std::wprintf(
+        L"[%ls] text=%ls enabled=%ls checked=%ls\n",
+        passed ? L"PASS" : L"FAIL",
+        state.text.c_str(),
+        state.enabled ? L"yes" : L"no",
+        state.checked ? L"yes" : L"no");
+    return passed ? 0 : 1;
+}
+
+int RunSubmenuCommandProbe(
+    std::wstring_view submenuText,
+    int submenuItemIndex,
+    std::wstring_view commandName)
+{
+    const HWND display = FindDisplayWindow();
+    if (!display)
+    {
+        std::wprintf(L"[FAIL] 未找到任务栏额度子窗口\n");
+        return 2;
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(display, &processId);
+    RECT before{};
+    GetWindowRect(display, &before);
+    HWND menuWindow = nullptr;
+    HMENU submenu = nullptr;
+    RECT rootItemRect{};
+    if (!OpenSubmenu(
+            display,
+            processId,
+            submenuText,
+            menuWindow,
+            submenu,
+            rootItemRect))
+    {
+        CancelMenu(display, processId);
+        std::wprintf(L"[FAIL] 无法打开目标子菜单\n");
+        return 2;
+    }
+
+    POINT originalCursor{};
+    const bool cursorRead = GetCursorPos(&originalCursor) != FALSE;
+    const POINT submenuPoint{
+        (rootItemRect.left + rootItemRect.right) / 2,
+        (rootItemRect.top + rootItemRect.bottom) / 2,
+    };
+    bool inputSent = SendMouseClick(submenuPoint);
+    RECT commandItemRect{};
+    inputSent = inputSent && WaitUntil(std::chrono::milliseconds(1000), [&]() {
+        return GetMenuItemRect(
+                   nullptr,
+                   submenu,
+                   static_cast<UINT>(submenuItemIndex),
+                   &commandItemRect)
+            && commandItemRect.right > commandItemRect.left
+            && commandItemRect.bottom > commandItemRect.top;
+    });
+    if (inputSent)
+    {
+        const POINT commandPoint{
+            (commandItemRect.left + commandItemRect.right) / 2,
+            (commandItemRect.top + commandItemRect.bottom) / 2,
+        };
+        inputSent = SendMouseClick(commandPoint);
+    }
+    const bool menuClosed = inputSent && WaitUntil(std::chrono::milliseconds(2000), [&]() {
+        return FindTopLevelProcessWindow(processId, 0, L"#32768", true) == nullptr;
+    });
+    if (cursorRead) SetCursorPos(originalCursor.x, originalCursor.y);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    RECT after{};
+    const HWND afterDisplay = FindDisplayWindow();
+    const bool sameWindow = afterDisplay == display && GetWindowRect(afterDisplay, &after)
+        && EqualRect(&before, &after);
+    const bool passed = menuClosed && sameWindow;
+    std::wprintf(
+        L"[%ls] command=%.*ls item=%d menu-closed=%ls same-hwnd-and-rect=%ls\n",
+        passed ? L"PASS" : L"FAIL",
+        static_cast<int>(commandName.size()),
+        commandName.data(),
+        submenuItemIndex,
+        menuClosed ? L"yes" : L"no",
+        sameWindow ? L"yes" : L"no");
+    if (!menuClosed) CancelMenu(display, processId);
+    return passed ? 0 : 1;
+}
+
 } // namespace
 
-int wmain()
+int wmain(int argc, wchar_t* argv[])
 {
     SetConsoleOutputCP(CP_UTF8);
+    if (argc == 4 && wcscmp(argv[1], L"--single-label-menu") == 0)
+    {
+        const bool expectedEnabled = wcscmp(argv[2], L"enabled") == 0;
+        const bool expectedChecked = wcscmp(argv[3], L"checked") == 0;
+        if ((!expectedEnabled && wcscmp(argv[2], L"disabled") != 0)
+            || (!expectedChecked && wcscmp(argv[3], L"unchecked") != 0))
+        {
+            std::wprintf(L"Usage: --single-label-menu enabled|disabled checked|unchecked\n");
+            return 2;
+        }
+        return RunSingleLabelMenuStateProbe(expectedEnabled, expectedChecked);
+    }
+    if (argc == 3 && wcscmp(argv[1], L"--content-command") == 0)
+    {
+        if (wcscmp(argv[2], L"five-hour") == 0)
+            return RunSubmenuCommandProbe(L"显示内容", 0, argv[2]);
+        if (wcscmp(argv[2], L"weekly") == 0)
+            return RunSubmenuCommandProbe(L"显示内容", 1, argv[2]);
+        if (wcscmp(argv[2], L"single-label") == 0)
+            return RunSubmenuCommandProbe(L"显示内容", 2, argv[2]);
+        std::wprintf(L"Usage: --content-command five-hour|weekly|single-label\n");
+        return 2;
+    }
+    if (argc == 3 && wcscmp(argv[1], L"--layout-command") == 0)
+    {
+        if (wcscmp(argv[2], L"vertical") == 0)
+            return RunSubmenuCommandProbe(L"显示模式", 0, argv[2]);
+        if (wcscmp(argv[2], L"horizontal") == 0)
+            return RunSubmenuCommandProbe(L"显示模式", 1, argv[2]);
+        std::wprintf(L"Usage: --layout-command vertical|horizontal\n");
+        return 2;
+    }
+    if (argc != 1)
+    {
+        std::wprintf(L"Unknown arguments.\n");
+        return 2;
+    }
     ProbeState state;
     wchar_t executablePath[MAX_PATH]{};
     const DWORD executablePathLength = GetModuleFileNameW(nullptr, executablePath, static_cast<DWORD>(std::size(executablePath)));

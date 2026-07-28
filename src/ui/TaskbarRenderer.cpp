@@ -4,6 +4,7 @@
 #include <d2d1helper.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <iterator>
 
 namespace cqt
@@ -349,6 +350,7 @@ HRESULT TaskbarRenderer::Draw(HWND window, UINT dpi, const TaskbarRenderModel& m
     // right-aligned and the percent sign is left-aligned around the shared
     // boundary, so they stay close without losing vertical alignment.
     const QuotaColumnLayout columns = ComputeQuotaColumnLayout(contentRight);
+    const bool drawQuotaLabels = ShouldDrawQuotaLabels(model);
     const auto quotaColor = [&](double remaining) {
         if (model.colorMode != ColorMode::QuotaAware) return systemColor;
         if (remaining <= 10.0) return D2D1::ColorF(0.95F, 0.22F, 0.18F, 1.0F);
@@ -364,8 +366,11 @@ HRESULT TaskbarRenderer::Draw(HWND window, UINT dpi, const TaskbarRenderModel& m
             columns.labelRight, line.top, columns.valueRight - valuePercentGap, line.bottom);
         const D2D1_RECT_F percentColumn = D2D1::RectF(
             columns.valueRight + valuePercentGap, line.top, columns.contentRight, line.bottom);
-        textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        deviceContext_->DrawTextW(label, labelLength, textFormat_.Get(), labelColumn, textBrush_.Get());
+        if (drawQuotaLabels)
+        {
+            textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            deviceContext_->DrawTextW(label, labelLength, textFormat_.Get(), labelColumn, textBrush_.Get());
+        }
         textFormat_->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
         valueBrush_->SetColor(quotaColor(remaining));
         deviceContext_->DrawTextW(value.c_str(), static_cast<UINT32>(value.size()), textFormat_.Get(), valueColumn, valueBrush_.Get());
@@ -400,8 +405,11 @@ HRESULT TaskbarRenderer::Draw(HWND window, UINT dpi, const TaskbarRenderModel& m
                 item.labelLeft, 0.0F, item.labelRight, height);
             const D2D1_RECT_F valueRect = D2D1::RectF(
                 item.valueLeft, 0.0F, item.valueRight, height);
-            itemFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
-            deviceContext_->DrawTextW(label, 2, itemFormat, labelRect, textBrush_.Get());
+            if (drawQuotaLabels)
+            {
+                itemFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+                deviceContext_->DrawTextW(label, 2, itemFormat, labelRect, textBrush_.Get());
+            }
             valueBrush_->SetColor(quotaColor(remaining));
             const std::wstring percentage = value + L"%";
             itemFormat->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_LEADING);
@@ -452,28 +460,111 @@ HRESULT TaskbarRenderer::Draw(HWND window, UINT dpi, const TaskbarRenderModel& m
     return hr;
 }
 
-void TaskbarRenderer::DrawGdiFallback(HWND window, HDC dc, UINT dpi, const TaskbarRenderModel& model) const
+GdiFallbackFrame RenderGdiFallbackFrame(
+    UINT width,
+    UINT height,
+    UINT dpi,
+    bool lightTheme,
+    const TaskbarRenderModel& model)
 {
-    RECT client{};
-    GetClientRect(window, &client);
-    SetBkMode(dc, TRANSPARENT);
-    COLORREF baseColor = SystemUsesLightTheme() ? RGB(26, 26, 26) : RGB(240, 240, 240);
+    GdiFallbackFrame frame;
+    frame.width = width;
+    frame.height = height;
+    if (width == 0 || height == 0) return frame;
+    frame.bgraPremultiplied.resize(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+
+    BITMAPINFO bitmapInfo{};
+    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth = static_cast<LONG>(width);
+    bitmapInfo.bmiHeader.biHeight = -static_cast<LONG>(height);
+    bitmapInfo.bmiHeader.biPlanes = 1;
+    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+    HDC maskDc = CreateCompatibleDC(nullptr);
+    if (!maskDc) return frame;
+    void* rawMaskPixels = nullptr;
+    HBITMAP maskBitmap = CreateDIBSection(
+        maskDc, &bitmapInfo, DIB_RGB_COLORS, &rawMaskPixels, nullptr, 0);
+    if (!maskBitmap || !rawMaskPixels)
+    {
+        if (maskBitmap) DeleteObject(maskBitmap);
+        DeleteDC(maskDc);
+        return frame;
+    }
+    HGDIOBJ previousBitmap = SelectObject(maskDc, maskBitmap);
+
+    SetBkMode(maskDc, TRANSPARENT);
+    SetBkColor(maskDc, RGB(0, 0, 0));
+    SetTextColor(maskDc, RGB(255, 255, 255));
+
+    COLORREF baseColor = lightTheme ? RGB(26, 26, 26) : RGB(240, 240, 240);
     if (model.colorMode == ColorMode::White) baseColor = RGB(255, 255, 255);
     if (model.colorMode == ColorMode::Black) baseColor = RGB(0, 0, 0);
-    SetTextColor(dc, baseColor);
     const bool compactHorizontalData = UseCompactHorizontalQuotaLayout(
         model.layout == LayoutMode::Horizontal,
         model.showFiveHour,
         model.showWeekly,
         !model.statusText.empty());
+    const bool drawQuotaLabels = ShouldDrawQuotaLabels(model);
     const bool narrowHorizontalData = compactHorizontalData
         && (model.warningMarker || model.fiveHour.size() >= 3 || model.weekly.size() >= 3);
     int fontSizePoints = 10;
     if (compactHorizontalData) fontSizePoints = narrowHorizontalData ? 6 : 7;
     HFONT font = CreateFontW(-MulDiv(fontSizePoints, static_cast<int>(dpi), 72), 0, 0, 0, FW_SEMIBOLD,
         FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
-    HGDIOBJ previous = SelectObject(dc, font);
+        ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Microsoft YaHei UI");
+    HGDIOBJ previousFont = font ? SelectObject(maskDc, font) : nullptr;
+
+    auto* maskPixels = static_cast<std::uint32_t*>(rawMaskPixels);
+    const auto drawText = [&](const wchar_t* text, int textLength, RECT bounds,
+                              UINT format, COLORREF color) {
+        std::fill_n(maskPixels, frame.bgraPremultiplied.size(), 0U);
+        DrawTextW(maskDc, text, textLength, &bounds, format);
+
+        const LONG left = std::clamp<LONG>(bounds.left, 0, static_cast<LONG>(width));
+        const LONG top = std::clamp<LONG>(bounds.top, 0, static_cast<LONG>(height));
+        const LONG right = std::clamp<LONG>(bounds.right, left, static_cast<LONG>(width));
+        const LONG bottom = std::clamp<LONG>(bounds.bottom, top, static_cast<LONG>(height));
+        const unsigned sourceRed = GetRValue(color);
+        const unsigned sourceGreen = GetGValue(color);
+        const unsigned sourceBlue = GetBValue(color);
+        for (LONG y = top; y < bottom; ++y)
+        {
+            for (LONG x = left; x < right; ++x)
+            {
+                const std::size_t index = static_cast<std::size_t>(y) * width
+                    + static_cast<std::size_t>(x);
+                const std::uint32_t mask = maskPixels[index];
+                const unsigned coverage = std::max({
+                    mask & 0xFFU,
+                    (mask >> 8U) & 0xFFU,
+                    (mask >> 16U) & 0xFFU,
+                });
+                if (coverage == 0) continue;
+
+                const std::uint32_t destination = frame.bgraPremultiplied[index];
+                const unsigned inverseCoverage = 255U - coverage;
+                const unsigned destinationBlue = destination & 0xFFU;
+                const unsigned destinationGreen = (destination >> 8U) & 0xFFU;
+                const unsigned destinationRed = (destination >> 16U) & 0xFFU;
+                const unsigned destinationAlpha = (destination >> 24U) & 0xFFU;
+                const unsigned blue = (sourceBlue * coverage + 127U) / 255U
+                    + (destinationBlue * inverseCoverage + 127U) / 255U;
+                const unsigned green = (sourceGreen * coverage + 127U) / 255U
+                    + (destinationGreen * inverseCoverage + 127U) / 255U;
+                const unsigned red = (sourceRed * coverage + 127U) / 255U
+                    + (destinationRed * inverseCoverage + 127U) / 255U;
+                const unsigned alpha = coverage
+                    + (destinationAlpha * inverseCoverage + 127U) / 255U;
+                frame.bgraPremultiplied[index] = blue | (green << 8U)
+                    | (red << 16U) | (alpha << 24U);
+            }
+        }
+    };
+
+    RECT client{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
     constexpr UINT common = DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
     const LONG warningWidth = MulDiv(
         static_cast<int>(kWarningWidthDip), static_cast<int>(std::max<UINT>(dpi, 1)), 96);
@@ -481,8 +572,8 @@ void TaskbarRenderer::DrawGdiFallback(HWND window, HDC dc, UINT dpi, const Taskb
     if (model.warningMarker) content.right = std::max(content.left + 1, content.right - warningWidth);
     if (!model.statusText.empty())
     {
-        DrawTextW(dc, model.statusText.c_str(), static_cast<int>(model.statusText.size()),
-                  &content, common | DT_CENTER);
+        drawText(model.statusText.c_str(), static_cast<int>(model.statusText.size()),
+                 content, common | DT_CENTER, baseColor);
     }
     else if (compactHorizontalData)
     {
@@ -500,12 +591,13 @@ void TaskbarRenderer::DrawGdiFallback(HWND window, HDC dc, UINT dpi, const Taskb
                            static_cast<LONG>(item.labelRight), content.bottom};
             RECT valueRect{static_cast<LONG>(item.valueLeft), content.top,
                            static_cast<LONG>(item.valueRight), content.bottom};
-            SetTextColor(dc, baseColor);
-            DrawTextW(dc, label, 2, &labelRect, common | DT_RIGHT);
+            if (drawQuotaLabels)
+            {
+                drawText(label, 2, labelRect, common | DT_RIGHT, baseColor);
+            }
             const std::wstring percentage = value + L"%";
-            SetTextColor(dc, valueColor(remaining));
-            DrawTextW(dc, percentage.c_str(), static_cast<int>(percentage.size()),
-                      &valueRect, common | DT_LEFT);
+            drawText(percentage.c_str(), static_cast<int>(percentage.size()),
+                     valueRect, common | DT_LEFT, valueColor(remaining));
         };
         const float middle = static_cast<float>(content.right) / 2.0F;
         constexpr float outerPadding = 0.0F;
@@ -514,8 +606,7 @@ void TaskbarRenderer::DrawGdiFallback(HWND window, HDC dc, UINT dpi, const Taskb
                            L"5h", model.fiveHour, model.fiveHourRemaining);
         RECT separator{static_cast<LONG>(middle - separatorHalfWidth), content.top,
                        static_cast<LONG>(middle + separatorHalfWidth), content.bottom};
-        SetTextColor(dc, baseColor);
-        DrawTextW(dc, L"|", 1, &separator, common | DT_CENTER);
+        drawText(L"|", 1, separator, common | DT_CENTER, baseColor);
         drawHorizontalItem(middle + separatorHalfWidth,
                            static_cast<float>(content.right) - outerPadding,
                            L"1W", model.weekly, model.weeklyRemaining);
@@ -530,14 +621,16 @@ void TaskbarRenderer::DrawGdiFallback(HWND window, HDC dc, UINT dpi, const Taskb
                            static_cast<LONG>(columns.valueRight) - 1, line.bottom};
             RECT percentRect{static_cast<LONG>(columns.valueRight) + 1, line.top,
                              static_cast<LONG>(columns.contentRight), line.bottom};
-            SetTextColor(dc, baseColor);
-            DrawTextW(dc, label, -1, &labelRect, common | DT_CENTER);
+            if (drawQuotaLabels)
+            {
+                drawText(label, -1, labelRect, common | DT_CENTER, baseColor);
+            }
             COLORREF valueColor = baseColor;
             if (model.colorMode == ColorMode::QuotaAware && remaining <= 10.0) valueColor = RGB(242, 56, 46);
             else if (model.colorMode == ColorMode::QuotaAware && remaining <= 20.0) valueColor = RGB(255, 166, 13);
-            SetTextColor(dc, valueColor);
-            DrawTextW(dc, value.c_str(), static_cast<int>(value.size()), &valueRect, common | DT_RIGHT);
-            DrawTextW(dc, L"%", 1, &percentRect, common | DT_LEFT);
+            drawText(value.c_str(), static_cast<int>(value.size()),
+                     valueRect, common | DT_RIGHT, valueColor);
+            drawText(L"%", 1, percentRect, common | DT_LEFT, valueColor);
         };
         if (model.showFiveHour && model.showWeekly)
         {
@@ -552,11 +645,61 @@ void TaskbarRenderer::DrawGdiFallback(HWND window, HDC dc, UINT dpi, const Taskb
     if (model.warningMarker)
     {
         RECT warning{content.right, client.top, client.right, client.bottom};
-        SetTextColor(dc, baseColor);
-        DrawTextW(dc, L"!", 1, &warning, common | DT_CENTER);
+        drawText(L"!", 1, warning, common | DT_CENTER, baseColor);
     }
-    SelectObject(dc, previous);
-    DeleteObject(font);
+
+    if (font && previousFont && previousFont != HGDI_ERROR) SelectObject(maskDc, previousFont);
+    if (font) DeleteObject(font);
+    if (previousBitmap && previousBitmap != HGDI_ERROR) SelectObject(maskDc, previousBitmap);
+    DeleteObject(maskBitmap);
+    DeleteDC(maskDc);
+    return frame;
+}
+
+void TaskbarRenderer::DrawGdiFallback(
+    HWND window,
+    UINT dpi,
+    const TaskbarRenderModel& model)
+{
+    RECT client{};
+    if (!GetClientRect(window, &client)) return;
+    const UINT width = static_cast<UINT>(std::max<LONG>(0, client.right - client.left));
+    const UINT height = static_cast<UINT>(std::max<LONG>(0, client.bottom - client.top));
+    if (width == 0 || height == 0 || !deviceContext_ || !swapChain_) return;
+
+    const GdiFallbackFrame frame = RenderGdiFallbackFrame(
+        width, height, dpi, SystemUsesLightTheme(), model);
+    if (frame.bgraPremultiplied.empty()) return;
+
+    const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            D2D1_ALPHA_MODE_PREMULTIPLIED),
+        96.0F,
+        96.0F);
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> frameBitmap;
+    HRESULT hr = deviceContext_->CreateBitmap(
+        D2D1::SizeU(width, height),
+        frame.bgraPremultiplied.data(),
+        width * sizeof(std::uint32_t),
+        &properties,
+        frameBitmap.ReleaseAndGetAddressOf());
+    if (SUCCEEDED(hr))
+    {
+        const D2D1_RECT_F destination = D2D1::RectF(
+            0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height));
+        deviceContext_->BeginDraw();
+        deviceContext_->Clear(D2D1::ColorF(0.0F, 0.0F, 0.0F, 0.0F));
+        deviceContext_->DrawBitmap(
+            frameBitmap.Get(),
+            &destination,
+            1.0F,
+            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+        hr = deviceContext_->EndDraw();
+    }
+    if (SUCCEEDED(hr)) hr = swapChain_->Present(1, 0);
+    if (FAILED(hr)) DiscardDeviceResources();
 }
 
 } // namespace cqt

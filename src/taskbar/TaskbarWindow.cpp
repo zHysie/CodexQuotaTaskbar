@@ -107,7 +107,7 @@ LRESULT TaskbarWindow::HandleMessage(HWND window, UINT message, WPARAM wParam, L
             // Keep the GDI path as a best-effort frame while the DirectComposition
             // device is being recreated. A bounded timer prevents a tight WM_PAINT
             // loop when the graphics stack remains unavailable.
-            renderer_.DrawGdiFallback(window, paint.hdc, GetDpiForWindow(window), model_);
+            renderer_.DrawGdiFallback(window, GetDpiForWindow(window), model_);
             UINT delay = 0;
             if (renderRecovery_.NextDelay(delay))
                 SetTimer(window, kRenderRecoveryTimer, delay, nullptr);

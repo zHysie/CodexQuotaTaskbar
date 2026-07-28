@@ -35,6 +35,7 @@ TaskbarRenderModel BuildTaskbarRenderModel(
     model.layout = settings.layout;
     model.showFiveHour = settings.showFiveHour;
     model.showWeekly = settings.showWeekly;
+    model.showSingleQuotaLabel = settings.showSingleQuotaLabel;
     model.colorMode = settings.colorMode;
 
     if (AuthenticationMissing(state.latestUsageAttempt))

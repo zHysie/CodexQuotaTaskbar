@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(CodexQuotaTaskbar VERSION 0.1.3 LANGUAGES CXX RC)
+project(CodexQuotaTaskbar VERSION 0.1.4 LANGUAGES CXX RC)
 
 enable_testing()
 
@@ -167,6 +167,7 @@ target_compile_definitions(TaskbarInteractionProbe PRIVATE
     WIN32_LEAN_AND_MEAN
     _WIN32_WINNT=0x0A00
 )
+target_include_directories(TaskbarInteractionProbe PRIVATE src)
 target_link_libraries(TaskbarInteractionProbe PRIVATE comctl32 user32)
 
 add_executable(AppLifecycleProbe

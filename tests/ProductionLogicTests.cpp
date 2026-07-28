@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <thread>
 
@@ -42,6 +43,14 @@ void Write(const std::filesystem::path& path, const std::string& text)
     std::filesystem::create_directories(path.parent_path());
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     stream << text;
+}
+
+std::string Read(const std::filesystem::path& path)
+{
+    std::ifstream stream(path, std::ios::binary);
+    return std::string(
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>());
 }
 
 class BlockingFakeTransport final : public cqt::IHttpTransport
@@ -203,18 +212,56 @@ private:
 void TestSettings(const std::filesystem::path& root)
 {
     const auto path = root / L"settings" / L"settings.ini";
-    Write(path, "[General]\nRefreshIntervalSeconds=77\nShowFiveHour=0\nShowWeekly=0\nColorMode=Unknown\nUnknownKey=ignored\n");
+    Write(path, "[General]\nSchemaVersion=1\nRefreshIntervalSeconds=77\nShowFiveHour=0\nShowWeekly=0\nColorMode=Unknown\nUnknownKey=ignored\n");
     auto settings = cqt::Settings::Load(path);
+    Check(settings.schemaVersion == cqt::kCurrentSettingsSchemaVersion,
+          "schema 1 settings upgrade to current schema");
+    Check(settings.showSingleQuotaLabel,
+          "schema 1 settings without single-quota label key keep labels visible");
     Check(settings.refreshIntervalSeconds == 180, "settings invalid interval defaults");
     Check(settings.showFiveHour && settings.showWeekly, "settings cannot hide both quotas");
     Check(settings.colorMode == cqt::ColorMode::QuotaAware, "settings unknown color defaults");
+
+    const auto invalidBooleanPath = root / L"settings-invalid-boolean" / L"settings.ini";
+    Write(invalidBooleanPath,
+          "[General]\nSchemaVersion=2\nShowFiveHour=0\nShowWeekly=1\nShowSingleQuotaLabel=2\n");
+    Check(cqt::Settings::Load(invalidBooleanPath).showSingleQuotaLabel,
+          "invalid single-quota label value falls back to visible");
+
     settings.layout = cqt::LayoutMode::Horizontal;
     settings.refreshIntervalSeconds = 600;
+    settings.showSingleQuotaLabel = false;
     std::wstring error;
     Check(cqt::Settings::Save(path, settings, error), "settings atomic save");
+    const std::string savedSettings = Read(path);
+    Check(savedSettings.find("SchemaVersion=2\r\n") != std::string::npos
+          && savedSettings.find("ShowSingleQuotaLabel=0\r\n") != std::string::npos,
+          "settings file writes schema 2 and hidden single-quota label preference");
     const auto loaded = cqt::Settings::Load(path);
-    Check(loaded.layout == cqt::LayoutMode::Horizontal && loaded.refreshIntervalSeconds == 600,
-          "settings persistence");
+    Check(loaded.schemaVersion == 2
+          && loaded.layout == cqt::LayoutMode::Horizontal
+          && loaded.refreshIntervalSeconds == 600
+          && !loaded.showSingleQuotaLabel,
+          "schema 2 settings persist single-quota label preference");
+
+    cqt::SettingsData singleFiveHour;
+    singleFiveHour.showWeekly = false;
+    Check(cqt::CanToggleSingleQuotaLabel(singleFiveHour),
+          "single five-hour quota enables label toggle");
+    Check(cqt::ToggleSingleQuotaLabel(singleFiveHour)
+          && !singleFiveHour.showSingleQuotaLabel,
+          "single five-hour quota toggles label preference");
+    singleFiveHour.showWeekly = true;
+    Check(!cqt::CanToggleSingleQuotaLabel(singleFiveHour)
+          && !cqt::ToggleSingleQuotaLabel(singleFiveHour)
+          && !singleFiveHour.showSingleQuotaLabel,
+          "dual quotas disable toggle and preserve hidden preference");
+
+    cqt::SettingsData singleWeekly;
+    singleWeekly.showFiveHour = false;
+    Check(cqt::ToggleSingleQuotaLabel(singleWeekly)
+          && !singleWeekly.showSingleQuotaLabel,
+          "single weekly quota toggles label preference");
     Check(cqt::StartupManager::BuildCommand(L"C:\\Program Files\\CodexQuotaTaskbar.exe")
           == L"\"C:\\Program Files\\CodexQuotaTaskbar.exe\"", "startup command quoting");
 

@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <fstream>
@@ -28,6 +29,17 @@ int ParseInteger(const std::map<std::string, std::string, std::less<>>& values,
     const std::string& text = iterator->second;
     const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
     return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() ? result : fallback;
+}
+
+bool ParseBoolean01(const std::map<std::string, std::string, std::less<>>& values,
+                    const char* key, bool fallback)
+{
+    const auto iterator = values.find(key);
+    if (iterator == values.end()) return fallback;
+    const int parsed = ParseInteger(values, key, fallback ? 1 : 0);
+    if (parsed == 0) return false;
+    if (parsed == 1) return true;
+    return fallback;
 }
 
 const char* LayoutName(cqt::LayoutMode mode)
@@ -74,7 +86,7 @@ SettingsData Settings::Normalize(SettingsData settings)
         settings.showFiveHour = true;
         settings.showWeekly = true;
     }
-    settings.schemaVersion = 1;
+    settings.schemaVersion = kCurrentSettingsSchemaVersion;
     return settings;
 }
 
@@ -106,6 +118,7 @@ SettingsData Settings::Load(const std::filesystem::path& path)
         settings.layout = iterator->second == "Horizontal" ? LayoutMode::Horizontal : LayoutMode::Vertical;
     settings.showFiveHour = ParseInteger(values, "ShowFiveHour", 1) != 0;
     settings.showWeekly = ParseInteger(values, "ShowWeekly", 1) != 0;
+    settings.showSingleQuotaLabel = ParseBoolean01(values, "ShowSingleQuotaLabel", true);
     if (const auto iterator = values.find("ColorMode"); iterator != values.end())
     {
         if (iterator->second == "System") settings.colorMode = ColorMode::System;
@@ -135,11 +148,12 @@ bool Settings::Save(const std::filesystem::path& path, const SettingsData& input
             return false;
         }
         file << "[General]\r\n"
-             << "SchemaVersion=1\r\n"
+             << "SchemaVersion=" << kCurrentSettingsSchemaVersion << "\r\n"
              << "RefreshIntervalSeconds=" << settings.refreshIntervalSeconds << "\r\n"
              << "Layout=" << LayoutName(settings.layout) << "\r\n"
              << "ShowFiveHour=" << (settings.showFiveHour ? 1 : 0) << "\r\n"
              << "ShowWeekly=" << (settings.showWeekly ? 1 : 0) << "\r\n"
+             << "ShowSingleQuotaLabel=" << (settings.showSingleQuotaLabel ? 1 : 0) << "\r\n"
              << "ColorMode=" << ColorName(settings.colorMode) << "\r\n";
         if (!file)
         {
