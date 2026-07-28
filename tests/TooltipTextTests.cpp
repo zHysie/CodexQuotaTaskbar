@@ -100,6 +100,48 @@ int main()
     Check(model.statusText.empty() && model.warningMarker,
           "stale network data keeps values and enables warning marker");
 
+    auto displayState = SuccessfulState(now);
+    cqt::SettingsData displaySettings;
+    displaySettings.showFiveHour = false;
+    displaySettings.showSingleQuotaLabel = false;
+    model = cqt::BuildTaskbarRenderModel(displayState, displaySettings);
+    Check(!model.showFiveHour && model.showWeekly
+          && !model.showSingleQuotaLabel && model.weekly == L"70"
+          && !cqt::ShouldDrawQuotaLabels(model),
+          "weekly-only presentation hides label without changing percentage value");
+
+    displaySettings.showFiveHour = true;
+    displaySettings.showWeekly = false;
+    model = cqt::BuildTaskbarRenderModel(displayState, displaySettings);
+    Check(model.showFiveHour && !model.showWeekly
+          && model.fiveHour == L"80" && !cqt::ShouldDrawQuotaLabels(model),
+          "five-hour-only presentation uses the same hidden-label rule");
+
+    displaySettings.showWeekly = true;
+    model = cqt::BuildTaskbarRenderModel(displayState, displaySettings);
+    Check(cqt::ShouldDrawQuotaLabels(model),
+          "dual-quota presentation always draws labels despite hidden preference");
+
+    displayState.lastSuccessfulUsage.fiveHour.available = false;
+    displayState.lastSuccessfulUsage.weekly.remainingPercent = 100.0;
+    displayState.latestUsageAttempt = displayState.lastSuccessfulUsage;
+    displaySettings.showFiveHour = true;
+    displaySettings.showWeekly = false;
+    model = cqt::BuildTaskbarRenderModel(displayState, displaySettings);
+    Check(model.fiveHour == L"--" && !cqt::ShouldDrawQuotaLabels(model),
+          "hidden label preserves unavailable percentage placeholder");
+    displaySettings.showFiveHour = false;
+    displaySettings.showWeekly = true;
+    model = cqt::BuildTaskbarRenderModel(displayState, displaySettings);
+    Check(model.weekly == L"100" && !cqt::ShouldDrawQuotaLabels(model),
+          "hidden label preserves three-digit percentage");
+
+    displayState.latestUsageAttempt = {};
+    displayState.latestUsageAttempt.errorCode = "HTTP_TIMEOUT";
+    model = cqt::BuildTaskbarRenderModel(displayState, displaySettings);
+    Check(model.warningMarker && !cqt::ShouldDrawQuotaLabels(model),
+          "hidden label does not suppress stale-data warning marker");
+
     state.latestUsageAttempt = {};
     state.latestUsageAttempt.errorCode = "AUTH_NOT_FOUND";
     state.latestUsageAttempt.errorMessage = L"未找到 Codex 登录信息。";

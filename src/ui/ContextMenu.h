@@ -14,6 +14,7 @@ enum ContextCommand : UINT
     CommandLayoutHorizontal,
     CommandShowFiveHour,
     CommandShowWeekly,
+    CommandShowSingleQuotaLabel,
     CommandInterval60,
     CommandInterval180,
     CommandInterval300,

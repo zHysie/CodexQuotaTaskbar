@@ -11,8 +11,10 @@
 
 #include "settings/Settings.h"
 
+#include <cstdint>
 #include <string>
 #include <optional>
+#include <vector>
 
 namespace cqt
 {
@@ -24,6 +26,7 @@ struct TaskbarRenderModel
     std::wstring statusText;
     bool showFiveHour = true;
     bool showWeekly = true;
+    bool showSingleQuotaLabel = true;
     bool warningMarker = false;
     LayoutMode layout = LayoutMode::Vertical;
     ColorMode colorMode = ColorMode::QuotaAware;
@@ -33,6 +36,30 @@ struct TaskbarRenderModel
     bool operator==(const TaskbarRenderModel&) const = default;
 };
 
+[[nodiscard]] constexpr bool ShouldDrawQuotaLabels(const TaskbarRenderModel& model) noexcept
+{
+    const bool hasQuota = model.showFiveHour || model.showWeekly;
+    const bool showsBothQuotas = model.showFiveHour && model.showWeekly;
+    return showsBothQuotas || (hasQuota && model.showSingleQuotaLabel);
+}
+
+struct GdiFallbackFrame
+{
+    UINT width = 0;
+    UINT height = 0;
+    std::vector<std::uint32_t> bgraPremultiplied;
+};
+
+// Rasterize text with GDI into a true premultiplied-alpha frame. This keeps the
+// fallback visually transparent and makes every frame independent from the
+// pixels drawn by the previous one.
+[[nodiscard]] GdiFallbackFrame RenderGdiFallbackFrame(
+    UINT width,
+    UINT height,
+    UINT dpi,
+    bool lightTheme,
+    const TaskbarRenderModel& model);
+
 class TaskbarRenderer
 {
 public:
@@ -40,7 +67,7 @@ public:
     void DiscardDeviceResources();
     HRESULT Draw(HWND window, UINT dpi);
     HRESULT Draw(HWND window, UINT dpi, const TaskbarRenderModel& model);
-    void DrawGdiFallback(HWND window, HDC deviceContext, UINT dpi, const TaskbarRenderModel& model) const;
+    void DrawGdiFallback(HWND window, UINT dpi, const TaskbarRenderModel& model);
     void InvalidateTheme() { lightTheme_.reset(); }
 
 private:

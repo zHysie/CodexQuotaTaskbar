@@ -500,6 +500,9 @@ void App::HandleCommand(UINT command)
     case CommandShowWeekly:
         if (settings_.showFiveHour || !settings_.showWeekly) { settings_.showWeekly = !settings_.showWeekly; settingsChanged = true; }
         break;
+    case CommandShowSingleQuotaLabel:
+        settingsChanged = ToggleSingleQuotaLabel(settings_);
+        break;
     case CommandInterval60: settings_.refreshIntervalSeconds = 60; settingsChanged = true; break;
     case CommandInterval180: settings_.refreshIntervalSeconds = 180; settingsChanged = true; break;
     case CommandInterval300: settings_.refreshIntervalSeconds = 300; settingsChanged = true; break;

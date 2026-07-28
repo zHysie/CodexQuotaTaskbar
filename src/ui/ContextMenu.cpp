@@ -3,9 +3,12 @@
 namespace
 {
 
-void AddChecked(HMENU menu, UINT command, const wchar_t* text, bool checked)
+void AddChecked(HMENU menu, UINT command, const wchar_t* text, bool checked, bool enabled = true)
 {
-    AppendMenuW(menu, MF_STRING | (checked ? MF_CHECKED : 0), command, text);
+    const UINT flags = MF_STRING
+        | (checked ? MF_CHECKED : 0)
+        | (enabled ? 0 : MF_GRAYED);
+    AppendMenuW(menu, flags, command, text);
 }
 
 } // namespace
@@ -36,6 +39,8 @@ UINT ContextMenu::Show(HWND owner, int screenX, int screenY,
     AppendMenuW(root, MF_POPUP, reinterpret_cast<UINT_PTR>(layout), L"显示模式");
     AddChecked(content, CommandShowFiveHour, L"显示 5 小时额度", settings.showFiveHour);
     AddChecked(content, CommandShowWeekly, L"显示周额度", settings.showWeekly);
+    AddChecked(content, CommandShowSingleQuotaLabel, L"单项时显示标识（5h / 1W）",
+               settings.showSingleQuotaLabel, CanToggleSingleQuotaLabel(settings));
     AppendMenuW(root, MF_POPUP, reinterpret_cast<UINT_PTR>(content), L"显示内容");
     AddChecked(interval, CommandInterval60, L"1 分钟", settings.refreshIntervalSeconds == 60);
     AddChecked(interval, CommandInterval180, L"3 分钟", settings.refreshIntervalSeconds == 180);

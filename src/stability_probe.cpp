@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <shellapi.h>
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -30,6 +31,7 @@ struct ProbeOptions
 {
     std::optional<unsigned int> desktopCycles;
     std::optional<unsigned int> observeSeconds;
+    bool observeAutoHideRestore = false;
 };
 
 struct ProbeState
@@ -143,6 +145,11 @@ bool ParseOptions(int argc, wchar_t** argv, ProbeOptions& options)
             if (!ParsePositiveUnsigned(argv[++index], 3600, seconds)) return false;
             options.observeSeconds = seconds;
         }
+        else if (argument == L"--observe-autohide-restore")
+        {
+            if (options.observeAutoHideRestore) return false;
+            options.observeAutoHideRestore = true;
+        }
         else
         {
             return false;
@@ -154,7 +161,8 @@ bool ParseOptions(int argc, wchar_t** argv, ProbeOptions& options)
 void WriteUsage()
 {
     std::wprintf(
-        L"Usage: TaskbarStabilityProbe.exe [--desktop-cycles 1..100] [--observe-seconds 1..3600]\n");
+        L"Usage: TaskbarStabilityProbe.exe [--desktop-cycles 1..100] "
+        L"[--observe-seconds 1..3600] [--observe-autohide-restore]\n");
 }
 
 bool ClassEquals(HWND window, const wchar_t* expected)
@@ -1365,6 +1373,87 @@ bool RunLongObservation(
     return passed;
 }
 
+UINT QueryTaskbarAppBarState(HWND taskbar)
+{
+    APPBARDATA data{sizeof(data)};
+    data.hWnd = taskbar;
+    return static_cast<UINT>(SHAppBarMessage(ABM_GETSTATE, &data));
+}
+
+bool ObserveAutoHideRestore(
+    ProbeState& state,
+    const WindowSnapshot& hiddenBaseline,
+    const RECT& monitorRect)
+{
+    const HWND taskbar = hiddenBaseline.parent;
+    const bool precondition = (QueryTaskbarAppBarState(taskbar) & ABS_AUTOHIDE) != 0
+        && hiddenBaseline.rect.top >= monitorRect.bottom;
+    Check(state, precondition, L"恢复观察开始时任务栏和额度窗口处于真实自动隐藏位置");
+    if (!precondition) return false;
+
+    bool settingChanged = false;
+    auto settingChangedAt = std::chrono::steady_clock::now();
+    const auto deadline = settingChangedAt + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        PumpMessages();
+        if ((QueryTaskbarAppBarState(taskbar) & ABS_AUTOHIDE) == 0)
+        {
+            settingChanged = true;
+            settingChangedAt = std::chrono::steady_clock::now();
+            break;
+        }
+        std::this_thread::sleep_for(kSampleInterval);
+    }
+
+    bool restored = false;
+    bool sameHandleAndParent = true;
+    long long restoreMilliseconds = -1;
+    while (settingChanged && std::chrono::steady_clock::now() < deadline)
+    {
+        PumpMessages();
+        WindowSnapshot current;
+        RECT taskbarCurrent{};
+        if (!CaptureDisplay(hiddenBaseline.window, current)
+            || current.parent != hiddenBaseline.parent)
+        {
+            sameHandleAndParent = false;
+            break;
+        }
+        if (current.visible
+            && current.rect.bottom <= monitorRect.bottom
+            && GetWindowRect(taskbar, &taskbarCurrent)
+            && taskbarCurrent.bottom <= monitorRect.bottom)
+        {
+            restored = true;
+            restoreMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - settingChangedAt).count();
+            break;
+        }
+        std::this_thread::sleep_for(kSampleInterval);
+    }
+
+    {
+        std::wostringstream output;
+        output << L"Auto-hide restore observation: setting_changed="
+               << (settingChanged ? L"yes" : L"no")
+               << L" same_hwnd_parent=" << (sameHandleAndParent ? L"yes" : L"no")
+               << L" restored=" << (restored ? L"yes" : L"no")
+               << L" restore_ms=" << restoreMilliseconds;
+        WriteLine(state, output.str());
+    }
+    const bool passed = settingChanged
+        && sameHandleAndParent
+        && restored
+        && restoreMilliseconds >= 0
+        && restoreMilliseconds <= kDesktopRecoveryTimeout.count();
+    Check(
+        state,
+        passed,
+        L"关闭自动隐藏后同一额度 HWND 和父窗口在 250ms 内回到屏幕内");
+    return passed;
+}
+
 void OpenReport(ProbeState& state)
 {
     wchar_t executablePath[32768]{};
@@ -1428,7 +1517,7 @@ int wmain(int argc, wchar_t** argv)
         WriteLine(state, output.str());
     }
 
-    if (options.desktopCycles || options.observeSeconds)
+    if (options.desktopCycles || options.observeSeconds || options.observeAutoHideRestore)
     {
         bool passed = true;
         if (options.desktopCycles)
@@ -1440,6 +1529,12 @@ int wmain(int argc, wchar_t** argv)
         if (options.observeSeconds)
         {
             passed = RunLongObservation(state, baseline, *options.observeSeconds) && passed;
+        }
+        if (options.observeAutoHideRestore)
+        {
+            passed = validMonitor
+                && ObserveAutoHideRestore(state, baseline, monitorRect)
+                && passed;
         }
         std::wostringstream summary;
         summary << L"Summary: passed=" << state.passed << L" failed=" << state.failed;
