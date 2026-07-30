@@ -34,9 +34,46 @@ struct TaskbarShellSignature
     UINT dpi = 96;
 };
 
+enum class TaskbarProbeFailure
+{
+    None,
+    TaskbarUnavailable,
+    PrimaryMonitorUnavailable,
+    TaskbarGeometryUnavailable,
+    UnsupportedTaskbarLayout,
+    ShellStructureUnavailable,
+    NotificationAreaUnavailable,
+    AutomationUnavailable,
+    AutomationTreeUnavailable,
+    AutomationQueryUnavailable,
+    TaskButtonBoundaryUnavailable,
+    InsufficientSafeSpace,
+    InsufficientExternalSafeSpace,
+};
+
+[[nodiscard]] constexpr bool IsTransientTaskbarProbeFailure(TaskbarProbeFailure failure)
+{
+    switch (failure)
+    {
+    case TaskbarProbeFailure::TaskbarUnavailable:
+    case TaskbarProbeFailure::PrimaryMonitorUnavailable:
+    case TaskbarProbeFailure::TaskbarGeometryUnavailable:
+    case TaskbarProbeFailure::ShellStructureUnavailable:
+    case TaskbarProbeFailure::NotificationAreaUnavailable:
+    case TaskbarProbeFailure::AutomationUnavailable:
+    case TaskbarProbeFailure::AutomationTreeUnavailable:
+    case TaskbarProbeFailure::AutomationQueryUnavailable:
+    case TaskbarProbeFailure::TaskButtonBoundaryUnavailable:
+        return true;
+    default:
+        return false;
+    }
+}
+
 struct TaskbarProbeResult
 {
     bool supported = false;
+    TaskbarProbeFailure failure = TaskbarProbeFailure::None;
     HWND taskbar = nullptr;
     HWND notificationArea = nullptr;
     RECT taskbarRect{};

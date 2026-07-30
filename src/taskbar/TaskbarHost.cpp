@@ -488,6 +488,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
     result.taskbar = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (!result.taskbar || !IsWindow(result.taskbar))
     {
+        result.failure = TaskbarProbeFailure::TaskbarUnavailable;
         result.reason = L"未找到当前主任务栏 Shell_TrayWnd。";
         return result;
     }
@@ -497,12 +498,14 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
     monitorInfo.cbSize = sizeof(monitorInfo);
     if (!monitor || !GetMonitorInfoW(monitor, &monitorInfo) || (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) == 0)
     {
+        result.failure = TaskbarProbeFailure::PrimaryMonitorUnavailable;
         result.reason = L"Shell_TrayWnd 不在当前主显示器上。";
         return result;
     }
 
     if (!GetWindowRect(result.taskbar, &result.taskbarRect))
     {
+        result.failure = TaskbarProbeFailure::TaskbarGeometryUnavailable;
         result.reason = L"无法读取主任务栏位置。";
         return result;
     }
@@ -511,6 +514,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
     const LONG taskbarHeight = RectHeight(result.taskbarRect);
     if (taskbarWidth <= taskbarHeight || result.taskbarRect.bottom < monitorInfo.rcMonitor.bottom - 2)
     {
+        result.failure = TaskbarProbeFailure::UnsupportedTaskbarLayout;
         result.reason = L"原型只支持 Windows 11 底部主任务栏。";
         return result;
     }
@@ -523,6 +527,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
 
     if (!CaptureShellSignature(result.taskbar, result.shellSignature))
     {
+        result.failure = TaskbarProbeFailure::ShellStructureUnavailable;
         result.reason = L"无法读取任务栏轻量结构签名。";
         return result;
     }
@@ -531,6 +536,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
     if (!result.notificationArea
         || !RectInside(result.notificationRect, result.taskbarRect, 2))
     {
+        result.failure = TaskbarProbeFailure::NotificationAreaUnavailable;
         result.reason = L"无法可靠识别任务栏通知区域。";
         return result;
     }
@@ -543,6 +549,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
         IID_PPV_ARGS(&automation));
     if (FAILED(hr))
     {
+        result.failure = TaskbarProbeFailure::AutomationUnavailable;
         result.reason = L"无法初始化 UI Automation，不能验证任务按钮边界。";
         return result;
     }
@@ -558,6 +565,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
     hr = automation->ElementFromHandle(result.taskbar, &root);
     if (FAILED(hr) || !root)
     {
+        result.failure = TaskbarProbeFailure::AutomationTreeUnavailable;
         result.reason = L"无法读取任务栏 UI Automation 树。";
         return result;
     }
@@ -566,6 +574,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
     hr = automation->CreateTrueCondition(&condition);
     if (FAILED(hr))
     {
+        result.failure = TaskbarProbeFailure::AutomationQueryUnavailable;
         result.reason = L"无法创建任务栏 UI Automation 查询。";
         return result;
     }
@@ -574,6 +583,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
     hr = root->FindAll(TreeScope_Descendants, condition.Get(), &elements);
     if (FAILED(hr) || !elements)
     {
+        result.failure = TaskbarProbeFailure::AutomationQueryUnavailable;
         result.reason = L"无法枚举任务栏 UI Automation 元素。";
         return result;
     }
@@ -618,6 +628,7 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
 
     if (result.occupiedElements.empty() || result.rightmostOccupied <= result.taskbarRect.left)
     {
+        result.failure = TaskbarProbeFailure::TaskButtonBoundaryUnavailable;
         result.reason = L"未能从 UI Automation 可靠识别任务按钮边界。";
         return result;
     }
@@ -632,11 +643,13 @@ TaskbarProbeResult TaskbarHost::ProbeCompatibility() const
 
     if (RectWidth(result.baseSafeRect) < minimumWidth)
     {
+        result.failure = TaskbarProbeFailure::InsufficientSafeSpace;
         result.reason = L"任务栏任务按钮与通知区域之间没有足够的连续安全空白。";
         return result;
     }
     if (!ApplyExternalObstacles(result))
     {
+        result.failure = TaskbarProbeFailure::InsufficientExternalSafeSpace;
         result.reason = L"第三方任务栏悬浮窗口之后没有足够的连续安全空白。";
         return result;
     }

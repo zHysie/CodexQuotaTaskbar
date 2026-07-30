@@ -27,7 +27,8 @@ private:
     static LRESULT CALLBACK ControllerWindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     LRESULT HandleControllerMessage(HWND window, UINT message, WPARAM wParam, LPARAM lParam);
     [[nodiscard]] bool RegisterControllerClass();
-    [[nodiscard]] bool AttachToTaskbar(std::wstring& error);
+    [[nodiscard]] bool AttachToTaskbar(std::wstring& error, bool* retryable = nullptr);
+    [[nodiscard]] bool WaitForStartupAttachRetry(ULONGLONG delayMilliseconds);
     void RequestReattach();
     void RequestSoftValidation();
     void ValidateHost();
