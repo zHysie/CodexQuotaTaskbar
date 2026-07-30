@@ -224,6 +224,18 @@ target_compile_features(TaskbarCollisionTests PRIVATE cxx_std_20)
 target_include_directories(TaskbarCollisionTests PRIVATE src)
 add_test(NAME TaskbarCollisionTests COMMAND TaskbarCollisionTests)
 
+add_executable(StartupAttachPolicyTests
+    tests/StartupAttachPolicyTests.cpp
+    src/taskbar/StartupAttachPolicy.h
+    src/taskbar/TaskbarHost.h
+)
+target_compile_features(StartupAttachPolicyTests PRIVATE cxx_std_20)
+target_compile_definitions(StartupAttachPolicyTests PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00
+)
+target_include_directories(StartupAttachPolicyTests PRIVATE src)
+add_test(NAME StartupAttachPolicyTests COMMAND StartupAttachPolicyTests)
+
 add_executable(TooltipTextTests
     tests/TooltipTextTests.cpp
     src/ui/TaskbarPresentation.cpp
@@ -260,7 +272,7 @@ target_link_libraries(ProductionLogicTests PRIVATE data_core advapi32)
 add_test(NAME ProductionLogicTests COMMAND ProductionLogicTests)
 
 if(MSVC)
-    foreach(target data_core taskbar_core CodexQuotaTaskbar CodexQuotaTaskbarPrototype TaskbarProbe TaskbarInteractionProbe AppLifecycleProbe TaskbarStabilityProbe QuotaLayoutTests TaskbarWindowTests TaskbarCollisionTests TooltipTextTests DataLayerTests ProductionLogicTests)
+    foreach(target data_core taskbar_core CodexQuotaTaskbar CodexQuotaTaskbarPrototype TaskbarProbe TaskbarInteractionProbe AppLifecycleProbe TaskbarStabilityProbe QuotaLayoutTests TaskbarWindowTests TaskbarCollisionTests StartupAttachPolicyTests TooltipTextTests DataLayerTests ProductionLogicTests)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
     endforeach()
     target_link_options(CodexQuotaTaskbarPrototype PRIVATE /MANIFEST:NO)

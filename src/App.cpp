@@ -2,6 +2,7 @@
 
 #include "AppVersion.h"
 #include "settings/StartupManager.h"
+#include "taskbar/StartupAttachPolicy.h"
 #include "ui/ContextMenu.h"
 #include "ui/QuotaLayout.h"
 #include "ui/TaskbarPresentation.h"
@@ -112,9 +113,32 @@ int App::Run(HINSTANCE instance)
         return 1;
     }
     std::wstring error;
-    if (!AttachToTaskbar(error))
+    const bool attached = RunStartupAttachSequence(
+        kStartupAttachPolicy,
+        [this, &error](bool& retryable)
+        {
+            if (AttachToTaskbar(error, &retryable)) return true;
+
+            // A failed SetParent or event-monitor setup may leave a partial
+            // child relationship. Remove it before the next full UIA probe so
+            // Explorer never enumerates our attached child during recovery.
+            host_.StopEventMonitoring();
+            taskbarWindow_.Destroy();
+            currentProbe_ = {};
+            return false;
+        },
+        [this](ULONGLONG delayMilliseconds)
+        {
+            return WaitForStartupAttachRetry(delayMilliseconds);
+        });
+    if (!attached)
     {
-        ShowError(error, false);
+        if (shuttingDown_)
+        {
+            Cleanup();
+            return 0;
+        }
+        ShowError(error.empty() ? L"无法附着主任务栏。" : error, false);
         Cleanup();
         return 2;
     }
@@ -162,7 +186,9 @@ LRESULT App::HandleControllerMessage(HWND window, UINT message, WPARAM wParam, L
 {
     if (message == taskbarCreatedMessage_ && taskbarCreatedMessage_ != 0)
     {
-        RequestReattach();
+        // During the bounded initial readiness wait there is no attached child
+        // to replace; the next startup attempt will probe the newly created bar.
+        if (currentProbe_.supported) RequestReattach();
         return 0;
     }
     switch (message)
@@ -185,8 +211,9 @@ LRESULT App::HandleControllerMessage(HWND window, UINT message, WPARAM wParam, L
     return DefWindowProcW(window, message, wParam, lParam);
 }
 
-bool App::AttachToTaskbar(std::wstring& error)
+bool App::AttachToTaskbar(std::wstring& error, bool* retryable)
 {
+    if (retryable) *retryable = false;
     if (!taskbarWindow_.Create())
     {
         error = L"无法创建任务栏额度窗口。";
@@ -195,19 +222,49 @@ bool App::AttachToTaskbar(std::wstring& error)
     const TaskbarProbeResult probe = host_.ProbeCompatibility();
     if (!probe.supported)
     {
+        if (retryable) *retryable = IsTransientTaskbarProbeFailure(probe.failure);
         error = probe.reason;
         return false;
     }
     if (!host_.Attach(taskbarWindow_.Window(), probe, error, kTaskbarDisplayWidthDip))
+    {
+        if (retryable) *retryable = true;
         return false;
+    }
     if (!host_.StartEventMonitoring(controller_, kTaskbarStructureChanged, probe))
     {
+        if (retryable) *retryable = true;
         error = L"无法监听任务栏关键控件变化。";
         return false;
     }
     currentProbe_ = probe;
     ResetHostValidationState();
     return true;
+}
+
+bool App::WaitForStartupAttachRetry(ULONGLONG delayMilliseconds)
+{
+    const ULONGLONG deadline = GetTickCount64() + delayMilliseconds;
+    while (!shuttingDown_)
+    {
+        const ULONGLONG now = GetTickCount64();
+        if (now >= deadline) return true;
+        const ULONGLONG remaining = deadline - now;
+        const DWORD timeout = static_cast<DWORD>(std::min<ULONGLONG>(remaining, MAXDWORD));
+        const DWORD waitResult = MsgWaitForMultipleObjectsEx(
+            0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (waitResult == WAIT_TIMEOUT) return true;
+        if (waitResult == WAIT_FAILED) return false;
+
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+        {
+            if (message.message == WM_QUIT) return false;
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+    }
+    return false;
 }
 
 void App::RequestReattach()
