@@ -36,6 +36,7 @@ cqt::ExternalWindowCandidate NormalExternalCandidate()
         {900, 1032, 1560, 1080},
         {0, 0, 1920, 1080},
         true,
+        false,
         true,
         false,
         false,
@@ -70,6 +71,26 @@ int main()
         !cqt::RectanglesApproximatelyEqual(
             {100, 200, 300, 400}, {103, 200, 300, 400}, 2),
         "rectangle movement beyond tolerance is detected");
+    Check(
+        cqt::IsAllowedTrayReclaimTransition(
+            {100, 200, 180, 240}, {148, 200, 228, 240},
+            {300, 192, 600, 248}, {348, 192, 600, 248}),
+        "tray contraction permits an equal pure right-position reclaim");
+    Check(
+        !cqt::IsAllowedTrayReclaimTransition(
+            {100, 200, 180, 240}, {148, 200, 228, 240},
+            {300, 192, 600, 248}, {300, 192, 600, 248}),
+        "right movement without tray contraction remains rejected");
+    Check(
+        !cqt::IsAllowedTrayReclaimTransition(
+            {100, 200, 180, 240}, {160, 200, 240, 240},
+            {300, 192, 600, 248}, {348, 192, 600, 248}),
+        "right movement beyond the tray contraction remains rejected");
+    Check(
+        !cqt::IsAllowedTrayReclaimTransition(
+            {100, 200, 180, 240}, {148, 201, 228, 241},
+            {300, 192, 600, 248}, {348, 192, 600, 248}),
+        "tray reclaim with vertical movement remains rejected");
 
     const auto expanded = cqt::ClampIntervalToSafeArea({400, 480}, {100, 600}, 68);
     Check(
@@ -175,7 +196,11 @@ int main()
     auto candidate = NormalExternalCandidate();
     Check(cqt::IsExternalObstacleCandidate(candidate), "visible top-level taskbar widget is retained");
     candidate.topLevel = false;
-    Check(!cqt::IsExternalObstacleCandidate(candidate), "child window is excluded");
+    Check(!cqt::IsExternalObstacleCandidate(candidate), "ordinary child window is excluded");
+    candidate.taskbarHostedChild = true;
+    Check(
+        cqt::IsExternalObstacleCandidate(candidate),
+        "foreign visible child hosted by the taskbar is retained");
     candidate = NormalExternalCandidate();
     candidate.cloaked = true;
     Check(!cqt::IsExternalObstacleCandidate(candidate), "DWM-cloaked window is excluded");
