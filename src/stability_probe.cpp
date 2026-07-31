@@ -1,3 +1,5 @@
+#include "taskbar/TaskbarCollision.h"
+
 #include <windows.h>
 #include <shellapi.h>
 #include <algorithm>
@@ -88,6 +90,7 @@ struct ObservationStats
     std::uint64_t visibilityTransitions = 0;
     std::uint64_t rectTransitions = 0;
     std::uint64_t allowedLeftTransitions = 0;
+    std::uint64_t allowedTrayReclaimTransitions = 0;
     std::uint64_t rightTransitions = 0;
     std::uint64_t invalidGeometryTransitions = 0;
 };
@@ -227,6 +230,11 @@ std::wstring FormatRect(const RECT& rect)
     std::wostringstream output;
     output << L"[" << rect.left << L"," << rect.top << L"," << rect.right << L"," << rect.bottom << L"]";
     return output.str();
+}
+
+cqt::RectangleEdges ToRectangleEdges(const RECT& rect)
+{
+    return {rect.left, rect.top, rect.right, rect.bottom};
 }
 
 void PumpMessages()
@@ -994,8 +1002,8 @@ bool RunDesktopCycles(
 
     WriteLine(state, L"Desktop cycles: Win+Shift+S begin");
     HWND reusableSnippingWindow = nullptr;
-    bool snippingResolved = false;
     bool snippingStartedByProbe = false;
+    bool capturedSnippingWindowsBeforeLaunch = false;
     std::vector<HWND> snippingWindowsBeforeLaunch;
     for (unsigned int cycle = 0; cycle < cycles; ++cycle)
     {
@@ -1060,15 +1068,20 @@ bool RunDesktopCycles(
         HWND fallbackOverlay = nullptr;
         if (!directOverlayReady)
         {
-            if (!snippingResolved)
+            if (!reusableSnippingWindow || !IsWindow(reusableSnippingWindow)
+                || !IsWindowVisible(reusableSnippingWindow))
             {
-                snippingResolved = true;
                 reusableSnippingWindow = FindVisibleSnippingToolWindow();
                 if (!reusableSnippingWindow)
                 {
-                    snippingWindowsBeforeLaunch = VisibleSnippingToolWindows();
-                    snippingStartedByProbe = LaunchSnippingTool();
-                    if (snippingStartedByProbe)
+                    if (!capturedSnippingWindowsBeforeLaunch)
+                    {
+                        snippingWindowsBeforeLaunch = VisibleSnippingToolWindows();
+                        capturedSnippingWindowsBeforeLaunch = true;
+                    }
+                    const bool launched = LaunchSnippingTool();
+                    snippingStartedByProbe = snippingStartedByProbe || launched;
+                    if (launched)
                     {
                         reusableSnippingWindow = WaitForSnippingToolWindow(
                             baseline,
@@ -1297,6 +1310,10 @@ bool RunLongObservation(
 {
     ObservationStats stats;
     RECT lastRect = baseline.rect;
+    HWND notificationArea = FindWindowExW(baseline.parent, nullptr, L"TrayNotifyWnd", nullptr);
+    RECT trayRectAtLastWindowPosition{};
+    static_cast<void>(notificationArea
+        && GetWindowRect(notificationArea, &trayRectAtLastWindowPosition));
     bool lastVisible = baseline.visible;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
 
@@ -1326,18 +1343,34 @@ bool RunLongObservation(
             RECT rect{};
             if (GetWindowRect(window, &rect) && EqualRect(&rect, &lastRect) == FALSE)
             {
+                RECT currentTrayRect{};
+                static_cast<void>(notificationArea
+                    && GetWindowRect(notificationArea, &currentTrayRect));
                 ++stats.rectTransitions;
                 const LONG leftDelta = rect.left - lastRect.left;
                 const LONG rightDelta = rect.right - lastRect.right;
                 const bool sameVertical = rect.top == lastRect.top && rect.bottom == lastRect.bottom;
                 const bool pureTranslation = sameVertical && leftDelta == rightDelta;
-                if (rect.left > lastRect.left || rect.right > lastRect.right)
-                    ++stats.rightTransitions;
-                else if (pureTranslation && leftDelta < 0)
+                if (pureTranslation && leftDelta < 0)
                     ++stats.allowedLeftTransitions;
+                else if (cqt::IsAllowedTrayReclaimTransition(
+                             ToRectangleEdges(lastRect),
+                             ToRectangleEdges(rect),
+                             ToRectangleEdges(trayRectAtLastWindowPosition),
+                             ToRectangleEdges(currentTrayRect)))
+                    ++stats.allowedTrayReclaimTransitions;
+                else if (rect.left > lastRect.left || rect.right > lastRect.right)
+                    ++stats.rightTransitions;
                 else
                     ++stats.invalidGeometryTransitions;
+                std::wostringstream transition;
+                transition << L"Long observation rect transition: from=" << FormatRect(lastRect)
+                           << L" to=" << FormatRect(rect)
+                           << L" tray_from=" << FormatRect(trayRectAtLastWindowPosition)
+                           << L" tray_now=" << FormatRect(currentTrayRect);
+                WriteLine(state, transition.str());
                 lastRect = rect;
+                trayRectAtLastWindowPosition = currentTrayRect;
             }
         }
         std::this_thread::sleep_for(kSampleInterval);
@@ -1354,6 +1387,7 @@ bool RunLongObservation(
            << L" visibility_transitions=" << stats.visibilityTransitions
            << L" rect_transitions=" << stats.rectTransitions
            << L" allowed_left=" << stats.allowedLeftTransitions
+           << L" allowed_tray_reclaim=" << stats.allowedTrayReclaimTransitions
            << L" right=" << stats.rightTransitions
            << L" invalid_geometry=" << stats.invalidGeometryTransitions;
     WriteLine(state, output.str());
@@ -1369,7 +1403,7 @@ bool RunLongObservation(
     Check(
         state,
         passed,
-        L"长时间采样中额度 HWND/父窗口持续存在，未右跳、未闪隐，仅允许同 HWND 纯左移");
+        L"长时间采样中额度 HWND/父窗口持续存在，未异常右跳、未闪隐，仅允许同 HWND 纯左移或通知区收缩后的受限复位");
     return passed;
 }
 

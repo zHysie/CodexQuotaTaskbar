@@ -80,6 +80,22 @@ inline bool RectanglesIntersect(const RectangleEdges& left, const RectangleEdges
         && left.top < right.bottom && left.bottom > right.top;
 }
 
+inline bool IsAllowedTrayReclaimTransition(
+    const RectangleEdges& previousWindow,
+    const RectangleEdges& currentWindow,
+    const RectangleEdges& previousTray,
+    const RectangleEdges& currentTray)
+{
+    const long windowLeftDelta = currentWindow.left - previousWindow.left;
+    const long windowRightDelta = currentWindow.right - previousWindow.right;
+    const long trayLeftDelta = currentTray.left - previousTray.left;
+    return currentWindow.top == previousWindow.top
+        && currentWindow.bottom == previousWindow.bottom
+        && windowLeftDelta > 0
+        && windowLeftDelta == windowRightDelta
+        && trayLeftDelta >= windowLeftDelta;
+}
+
 inline bool IsExcludedExternalWindowClass(std::wstring_view className)
 {
     return className == L"CodexQuotaTaskbar.Display"
@@ -95,6 +111,7 @@ struct ExternalWindowCandidate
     RectangleEdges baseSafeRect{};
     RectangleEdges monitorRect{};
     bool topLevel = false;
+    bool taskbarHostedChild = false;
     bool visible = false;
     bool cloaked = false;
     bool excludedProcess = false;
@@ -106,7 +123,8 @@ struct ExternalWindowCandidate
 
 inline bool IsExternalObstacleCandidate(const ExternalWindowCandidate& candidate)
 {
-    if (!candidate.topLevel || !candidate.visible || candidate.cloaked
+    if ((!candidate.topLevel && !candidate.taskbarHostedChild)
+        || !candidate.visible || candidate.cloaked
         || candidate.excludedProcess || candidate.excludedClass)
         return false;
 

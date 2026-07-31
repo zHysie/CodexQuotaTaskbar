@@ -119,13 +119,19 @@ struct ExternalWindowContext
     RECT monitorRect{};
     DWORD taskbarProcessId = 0;
     UINT dpi = 96;
+    bool taskbarHostedChildren = false;
+    std::vector<HWND>* acceptedWindows = nullptr;
     std::vector<cqt::ExternalWindowObstacle>* obstacles = nullptr;
 };
 
 BOOL CALLBACK CollectExternalWindow(HWND window, LPARAM parameter)
 {
     auto* context = reinterpret_cast<ExternalWindowContext*>(parameter);
-    if (!context || !context->obstacles) return TRUE;
+    if (!context || !context->acceptedWindows || !context->obstacles) return TRUE;
+
+    if (std::find(context->acceptedWindows->begin(), context->acceptedWindows->end(), window)
+        != context->acceptedWindows->end())
+        return TRUE;
 
     DWORD processId = 0;
     GetWindowThreadProcessId(window, &processId);
@@ -143,6 +149,7 @@ BOOL CALLBACK CollectExternalWindow(HWND window, LPARAM parameter)
         ToRectangleEdges(context->baseSafeRect),
         ToRectangleEdges(context->monitorRect),
         GetAncestor(window, GA_ROOT) == window,
+        context->taskbarHostedChildren,
         IsWindowVisible(window) != FALSE,
         IsWindowCloaked(window),
         processId == 0 || processId == context->taskbarProcessId
@@ -154,6 +161,7 @@ BOOL CALLBACK CollectExternalWindow(HWND window, LPARAM parameter)
     if (!cqt::IsExternalObstacleCandidate(candidate))
         return TRUE;
 
+    context->acceptedWindows->push_back(window);
     context->obstacles->push_back({rect, processId, className});
     return TRUE;
 }
@@ -171,14 +179,19 @@ bool ApplyExternalObstacles(cqt::TaskbarProbeResult& result)
         SetRectEmpty(&result.safeRect);
         return false;
     }
+    std::vector<HWND> acceptedWindows;
     ExternalWindowContext context{
         result.taskbarRect,
         result.baseSafeRect,
         monitorInfo.rcMonitor,
         taskbarProcessId,
         result.dpi,
+        false,
+        &acceptedWindows,
         &result.externalObstacles};
     EnumWindows(CollectExternalWindow, reinterpret_cast<LPARAM>(&context));
+    context.taskbarHostedChildren = true;
+    EnumChildWindows(result.taskbar, CollectExternalWindow, reinterpret_cast<LPARAM>(&context));
 
     std::vector<cqt::HorizontalInterval> intervals;
     intervals.reserve(result.externalObstacles.size());
