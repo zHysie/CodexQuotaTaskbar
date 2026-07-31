@@ -29,13 +29,13 @@
 
 ### 方式一：直接下载 EXE
 
-1. 点击 [直接下载 `CodexQuotaTaskbar-v0.1.4-win-x64.exe`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.4/CodexQuotaTaskbar-v0.1.4-win-x64.exe)。
+1. 点击 [直接下载 `CodexQuotaTaskbar-v0.1.5-win-x64.exe`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.5/CodexQuotaTaskbar-v0.1.5-win-x64.exe)。
 2. 将下载的 EXE 保存或移动到一个固定目录。
 3. 双击运行，程序会直接出现在主任务栏中。
 
 ### 方式二：下载完整压缩包
 
-1. 下载 [`CodexQuotaTaskbar-v0.1.4-win-x64.zip`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.4/CodexQuotaTaskbar-v0.1.4-win-x64.zip)。
+1. 下载 [`CodexQuotaTaskbar-v0.1.5-win-x64.zip`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.5/CodexQuotaTaskbar-v0.1.5-win-x64.zip)。
 2. 解压到固定目录，不要直接在压缩包内运行。
 3. 双击解压后的 `CodexQuotaTaskbar.exe`。
 
@@ -45,7 +45,7 @@
 
 运行环境：Windows 11 x64，目标电脑需安装 Microsoft Visual C++ 2015–2026 x64 运行库。
 
-v0.1.4 暂无安装器、自动更新和代码签名。Windows 可能显示“未知发布者”或 SmartScreen 提示，请只从本仓库 Release 下载并核对 SHA-256。
+v0.1.5 暂无安装器、自动更新和代码签名。Windows 可能显示“未知发布者”或 SmartScreen 提示，请只从本仓库 Release 下载并核对 SHA-256。
 
 ## 使用说明
 
@@ -84,7 +84,9 @@ https://chatgpt.com/backend-api/wham/rate-limit-reset-credits
 
 ## 支持范围与已知限制
 
-v0.1.4 在 Windows 11 build `22631.6199`、96 DPI、单显示器 1920×1080 环境完成本机构建、CTest 6/6、任务栏/稳定性/交互/生命周期探针，以及单/双额度、单双行、重启持久化、全屏、截图遮罩、任务栏自动隐藏和 Explorer 重启的真实桌面验证。正式构建门槛以 Windows 2022 / VS2022 GitHub Actions 为准。
+v0.1.5 在 Windows 11 build `22631.6199`、96 DPI、单显示器 1920×1080 环境完成本机构建、CTest 7/7、任务栏探针 `supported`、稳定性 19/19、最终交互 21/21 和生命周期探针。受控重启 Explorer 后，在任务栏结构仍未就绪时启动程序，v0.1.5 保持运行并在结构恢复后自动附着为 84×42 子窗口；启动阶段对暂时未就绪的失败会执行最多 6 次有界静默重试。正式构建门槛以 Windows 2022 / VS2022 GitHub Actions 为准。
+
+本次发布没有在当前会话中执行真实注销再登录。产品负责人在知悉这一验证缺口后要求立即发布，因此该项作为已接受但未实测的风险保留，不得理解为已经通过；明确不支持的任务栏布局和空间不足仍会立即报错。
 
 本机未安装 TrafficMonitor，产品负责人明确豁免 v0.1.4 的本轮复核，相关兼容性只保留 v0.1.2 的历史结果。Win+Shift+S 直接路径本轮通过 8/10，另外 2 轮使用 SnippingTool Ctrl+N 真实截图遮罩补测通过。
 
