@@ -31,7 +31,9 @@ private:
     [[nodiscard]] bool WaitForStartupAttachRetry(ULONGLONG delayMilliseconds);
     void RequestReattach();
     void RequestSoftValidation();
+    void RequestResumeValidation();
     void ValidateHost();
+    void ResetSoftValidationSamples();
     void ResetHostValidationState();
     void HandleContextMenu(int x, int y);
     void HandleCommand(UINT command);
@@ -52,6 +54,7 @@ private:
     bool reattachPending_ = false;
     bool softValidationPending_ = false;
     ULONGLONG nextReattachAttempt_ = 0;
+    ULONGLONG resumeValidationDeadline_ = 0;
     ULONGLONG nextExternalCollisionSample_ = 0;
     int reattachAttempts_ = 0;
     int structuralChangeSamples_ = 0;

@@ -2,6 +2,7 @@
 
 #include "AppVersion.h"
 #include "settings/StartupManager.h"
+#include "taskbar/ResumeValidationPolicy.h"
 #include "taskbar/StartupAttachPolicy.h"
 #include "ui/ContextMenu.h"
 #include "ui/QuotaLayout.h"
@@ -202,7 +203,8 @@ LRESULT App::HandleControllerMessage(HWND window, UINT message, WPARAM wParam, L
     case WM_DISPLAYCHANGE: RequestSoftValidation(); return 0;
     case WM_SETTINGCHANGE: UpdatePresentation(); return 0;
     case WM_POWERBROADCAST:
-        if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND) RequestSoftValidation();
+        if (wParam == PBT_APMRESUMEAUTOMATIC || wParam == PBT_APMRESUMESUSPEND)
+            RequestResumeValidation();
         return TRUE;
     case WM_CLOSE: BeginShutdown(); return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
@@ -285,9 +287,22 @@ void App::RequestSoftValidation()
     if (controller_) SetTimer(controller_, kValidationTimer, kFastValidationInterval, nullptr);
 }
 
-void App::ResetHostValidationState()
+void App::RequestResumeValidation()
 {
-    softValidationPending_ = false;
+    if (shuttingDown_) return;
+    resumeValidationDeadline_ = kResumeValidationPolicy.DeadlineFrom(GetTickCount64());
+    softValidationPending_ = true;
+    ResetSoftValidationSamples();
+    if (controller_)
+        SetTimer(
+            controller_,
+            kValidationTimer,
+            kResumeValidationPolicy.validationIntervalMilliseconds,
+            nullptr);
+}
+
+void App::ResetSoftValidationSamples()
+{
     structuralChangeSamples_ = 0;
     externalCollisionState_ = {};
     trayReclaimState_ = {};
@@ -296,6 +311,13 @@ void App::ResetHostValidationState()
     structuralCandidateValid_ = false;
     structuralTaskbarCandidate_ = {};
     structuralDpiCandidate_ = 0;
+}
+
+void App::ResetHostValidationState()
+{
+    softValidationPending_ = false;
+    resumeValidationDeadline_ = 0;
+    ResetSoftValidationSamples();
 }
 
 void App::ValidateHost()
@@ -337,6 +359,26 @@ void App::ValidateHost()
         RequestReattach();
         return;
     }
+
+    const ULONGLONG validationTime = GetTickCount64();
+    if (kResumeValidationPolicy.ShouldDefer(validationTime, resumeValidationDeadline_))
+    {
+        // Explorer can publish Shell_TrayWnd before TrayNotifyWnd and the task
+        // switcher hierarchy have settled after resume. Keep the attached
+        // child and discard pre-suspend structural/collision samples until the
+        // bounded grace period ends; persistent failures then follow the
+        // normal validation and reattach path.
+        softValidationPending_ = true;
+        ResetSoftValidationSamples();
+        if (controller_)
+            SetTimer(
+                controller_,
+                kValidationTimer,
+                kResumeValidationPolicy.validationIntervalMilliseconds,
+                nullptr);
+        return;
+    }
+    resumeValidationDeadline_ = 0;
 
     if (host_.IsForegroundFullscreen(currentProbe_))
     {

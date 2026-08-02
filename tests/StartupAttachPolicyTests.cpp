@@ -1,3 +1,4 @@
+#include "taskbar/ResumeValidationPolicy.h"
 #include "taskbar/StartupAttachPolicy.h"
 #include "taskbar/TaskbarHost.h"
 
@@ -99,6 +100,22 @@ int main()
     Check(delays.size() == static_cast<std::size_t>(
               cqt::kStartupAttachPolicy.maximumAttempts - 1),
           "bounded startup attempts do not wait after the final failure");
+
+    const ULONGLONG resumeStartedAt = 1000;
+    const ULONGLONG resumeDeadline =
+        cqt::kResumeValidationPolicy.DeadlineFrom(resumeStartedAt);
+    Check(resumeDeadline == 16000,
+          "resume validation grace has a bounded fifteen-second deadline");
+    Check(cqt::kResumeValidationPolicy.ShouldDefer(resumeStartedAt, resumeDeadline),
+          "resume validation is deferred at the beginning of the grace period");
+    Check(cqt::kResumeValidationPolicy.ShouldDefer(resumeDeadline - 1, resumeDeadline),
+          "resume validation remains deferred immediately before the deadline");
+    Check(!cqt::kResumeValidationPolicy.ShouldDefer(resumeDeadline, resumeDeadline),
+          "resume validation resumes at the grace deadline");
+    Check(!cqt::kResumeValidationPolicy.ShouldDefer(resumeStartedAt, 0),
+          "a cleared resume deadline never defers normal validation");
+    Check(cqt::kResumeValidationPolicy.validationIntervalMilliseconds == 1000,
+          "resume validation uses a bounded one-second polling interval");
 
     std::printf("startup attach policy summary: failures=%d\n", failures);
     return failures == 0 ? 0 : 1;
