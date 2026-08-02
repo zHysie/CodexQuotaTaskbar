@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(CodexQuotaTaskbar VERSION 0.1.6 LANGUAGES CXX RC)
+project(CodexQuotaTaskbar VERSION 0.1.7 LANGUAGES CXX RC)
 
 enable_testing()
 
@@ -226,6 +226,7 @@ add_test(NAME TaskbarCollisionTests COMMAND TaskbarCollisionTests)
 
 add_executable(StartupAttachPolicyTests
     tests/StartupAttachPolicyTests.cpp
+    src/taskbar/ResumeValidationPolicy.h
     src/taskbar/StartupAttachPolicy.h
     src/taskbar/TaskbarHost.h
 )
