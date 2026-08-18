@@ -1,5 +1,7 @@
 #pragma once
 
+#include "usage/UsageModels.h"
+
 #include <filesystem>
 #include <string>
 
@@ -9,7 +11,7 @@ namespace cqt
 enum class LayoutMode { Vertical, Horizontal };
 enum class ColorMode { QuotaAware, System, White, Black };
 
-inline constexpr int kCurrentSettingsSchemaVersion = 2;
+inline constexpr int kCurrentSettingsSchemaVersion = 3;
 
 struct SettingsData
 {
@@ -20,6 +22,7 @@ struct SettingsData
     bool showWeekly = true;
     bool showSingleQuotaLabel = true;
     ColorMode colorMode = ColorMode::QuotaAware;
+    QuotaProvider activeProvider = QuotaProvider::Codex;
 };
 
 [[nodiscard]] constexpr bool CanToggleSingleQuotaLabel(const SettingsData& settings) noexcept

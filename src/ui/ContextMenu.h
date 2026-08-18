@@ -10,6 +10,8 @@ namespace cqt
 enum ContextCommand : UINT
 {
     CommandRefresh = 1001,
+    CommandProviderCodex,
+    CommandProviderZhipu,
     CommandLayoutVertical,
     CommandLayoutHorizontal,
     CommandShowFiveHour,

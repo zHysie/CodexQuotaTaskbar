@@ -2,6 +2,8 @@
 #include "usage/HttpPolicy.h"
 #include "usage/ResetCreditsParser.h"
 #include "usage/UsageParser.h"
+#include "usage/ZhipuAuthReader.h"
+#include "usage/ZhipuUsageParser.h"
 
 #include <windows.h>
 
@@ -141,6 +143,100 @@ void TestAuthReader()
     std::filesystem::remove_all(root);
 }
 
+void TestZhipuParser()
+{
+    const auto full = cqt::ZhipuUsageParser::Parse(ReadFixture(L"zhipu_quota_full.json"), 1700000000);
+    Check(full.success && full.fiveHour.available && full.weekly.available, "zhipu dual windows");
+    Check(std::fabs(full.fiveHour.remainingPercent - 87.5) < 0.001
+          && std::fabs(full.weekly.remainingPercent - 54.75) < 0.001,
+          "zhipu percentage is used ratio converted to remaining");
+    Check(full.fiveHour.resetAtUnixSeconds == 1893456000
+          && full.weekly.resetAtUnixSeconds == 1893628800,
+          "zhipu millisecond reset time converted to unix seconds");
+    Check(full.monthlyMcpAvailable && std::fabs(full.monthlyMcpUsedPercent - 3.2) < 0.001,
+          "zhipu optional monthly mcp usage captured");
+
+    const auto weeklyOnly = cqt::ZhipuUsageParser::Parse(ReadFixture(L"zhipu_quota_weekly_only.json"), 1000);
+    Check(weeklyOnly.success && !weeklyOnly.fiveHour.available && weeklyOnly.weekly.available
+          && std::fabs(weeklyOnly.weekly.remainingPercent - 67.0) < 0.001,
+          "zhipu legacy single-tier plan degrades to weekly only");
+    Check(!weeklyOnly.monthlyMcpAvailable, "zhipu missing time limit omits mcp line");
+
+    const auto unitMissing = cqt::ZhipuUsageParser::Parse(ReadFixture(L"zhipu_quota_unit_missing.json"), 1000);
+    Check(unitMissing.success && unitMissing.fiveHour.available && unitMissing.weekly.available,
+          "zhipu missing unit falls back to heuristic classification");
+    Check(std::fabs(unitMissing.fiveHour.remainingPercent - 40.0) < 0.001
+          && std::fabs(unitMissing.weekly.remainingPercent - 80.0) < 0.001,
+          "zhipu heuristic prefers resetless entry for five-hour window");
+    Check(unitMissing.weekly.resetAtUnixSeconds == 1893542400
+          && unitMissing.fiveHour.resetAtUnixSeconds == 0,
+          "zhipu seconds reset time accepted and missing reset stays zero");
+
+    const auto invalidJson = cqt::ZhipuUsageParser::Parse("{not-json", 0);
+    Check(!invalidJson.success && invalidJson.errorCode == "ZHIPU_JSON_INVALID", "zhipu invalid json");
+    const auto outOfRange = cqt::ZhipuUsageParser::Parse(ReadFixture(L"zhipu_quota_out_of_range.json"), 0);
+    Check(!outOfRange.success && outOfRange.errorCode == "ZHIPU_SCHEMA_INVALID",
+          "zhipu out-of-range percentages rejected without clamp");
+    Check(!cqt::ZhipuUsageParser::Parse(R"({"data":{}})", 0).success, "zhipu missing limits rejected");
+    Check(!cqt::ZhipuUsageParser::Parse("[]", 0).success, "zhipu root type rejected");
+    const auto stringReset = cqt::ZhipuUsageParser::Parse(
+        R"({"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"percentage":10,"nextResetTime":"soon"}]}})", 0);
+    Check(stringReset.success && stringReset.fiveHour.available
+          && stringReset.fiveHour.resetAtUnixSeconds == 0,
+          "zhipu invalid reset time keeps quota window without reset countdown");
+    const auto lowerType = cqt::ZhipuUsageParser::Parse(
+        R"({"data":{"limits":[{"type":"tokens_limit","unit":3,"percentage":10},{"type":"CREDIT_LIMIT","unit":6,"percentage":20}]}})", 0);
+    Check(lowerType.success && lowerType.fiveHour.available && lowerType.weekly.available,
+          "zhipu type matching is case-insensitive and accepts credit limit");
+}
+
+void TestZhipuAuthReader()
+{
+    const std::filesystem::path root = TemporaryDirectory();
+    const std::filesystem::path preferred = root / L"claude-a" / L"settings.json";
+    const std::filesystem::path fallback = root / L"claude-b" / L"settings.json";
+    WriteText(fallback,
+        R"({"model":"fixture","env":{"ANTHROPIC_AUTH_TOKEN":"fixture-key","ANTHROPIC_BASE_URL":"https://open.bigmodel.cn/api/anthropic"}})");
+
+    cqt::ZhipuAuthSearchPaths paths{{preferred, fallback, fallback}};
+    cqt::ZhipuAuthReader reader;
+    auto result = reader.Read(paths);
+    Check(result.credentials.has_value() && result.sourcePath == fallback,
+          "zhipu auth ordered fallback and duplicate removal");
+    Check(result.credentials && result.credentials->apiKey.View() == "fixture-key"
+          && result.credentials->quotaHost == L"open.bigmodel.cn",
+          "zhipu auth extracts key and maps bigmodel base url");
+    Check(result.checkedPaths.size() == 2, "zhipu auth checked paths are deterministic");
+
+    WriteText(preferred,
+        R"({"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-key","ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}})");
+    result = reader.Read(paths);
+    Check(result.credentials && result.credentials->quotaHost == L"api.z.ai"
+          && result.sourcePath == preferred, "zhipu auth maps international base url");
+
+    WriteText(preferred,
+        R"({"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-key","ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic"}})");
+    result = reader.Read(paths);
+    Check(!result.credentials && result.errorCode == "ZHIPU_BASE_URL_UNSUPPORTED",
+          "zhipu auth rejects non-zhipu base url before any request");
+
+    WriteText(preferred, R"({"env":{"ANTHROPIC_BASE_URL":"https://open.bigmodel.cn/api/anthropic"}})");
+    result = reader.Read(paths);
+    Check(!result.credentials && result.errorCode == "ZHIPU_AUTH_TOKEN_MISSING",
+          "zhipu auth missing token reported");
+
+    WriteText(preferred, "{bad-json");
+    result = reader.Read(paths);
+    Check(!result.credentials && result.errorCode == "ZHIPU_AUTH_JSON_INVALID",
+          "zhipu auth invalid json is not skipped");
+
+    result = reader.Read(cqt::ZhipuAuthSearchPaths{});
+    Check(!result.credentials && result.errorCode == "ZHIPU_AUTH_NOT_FOUND",
+          "zhipu auth no candidates reported");
+
+    std::filesystem::remove_all(root);
+}
+
 void TestHttpPolicy()
 {
     cqt::HttpResponse response;
@@ -180,6 +276,8 @@ int main()
     TestUsageParser();
     TestResetParser();
     TestAuthReader();
+    TestZhipuParser();
+    TestZhipuAuthReader();
     TestHttpPolicy();
     std::printf("data layer summary: failures=%d\n", failures);
     return failures == 0 ? 0 : 1;

@@ -97,16 +97,39 @@ HttpResponse WinHttpTransport::Get(std::wstring_view host, std::wstring_view pat
                                    std::string_view accessToken, std::string_view accountId)
 {
     HttpResponse response;
-    if (!session_ || host != L"chatgpt.com"
-        || (path != L"/backend-api/wham/usage"
-            && path != L"/backend-api/wham/rate-limit-reset-credits"))
+    // 传输层唯一发下发点：主机与路径精确匹配固定只读额度端点。
+    // rawAuthorization = true 时 Authorization 头直接使用密钥原文（智谱接口
+    // 不使用 Bearer 方案），且不携带账号头。
+    struct Destination
+    {
+        const wchar_t* host;
+        const wchar_t* path;
+        bool rawAuthorization;
+    };
+    constexpr Destination kAllowedDestinations[] = {
+        { L"chatgpt.com", L"/backend-api/wham/usage", false },
+        { L"chatgpt.com", L"/backend-api/wham/rate-limit-reset-credits", false },
+        { L"open.bigmodel.cn", L"/api/monitor/usage/quota/limit", true },
+        { L"api.z.ai", L"/api/monitor/usage/quota/limit", true },
+    };
+    const Destination* destination = nullptr;
+    for (const Destination& allowed : kAllowedDestinations)
+    {
+        if (host == allowed.host && path == allowed.path)
+        {
+            destination = &allowed;
+            break;
+        }
+    }
+    if (!session_ || !destination)
     {
         response.transportError = TransportError::SecurityPolicy;
         response.errorCode = "HTTP_DESTINATION_REJECTED";
         return response;
     }
 
-    InternetHandle connection(WinHttpConnect(session_, L"chatgpt.com", INTERNET_DEFAULT_HTTPS_PORT, 0));
+    InternetHandle connection(WinHttpConnect(session_, destination->host,
+        INTERNET_DEFAULT_HTTPS_PORT, 0));
     if (!connection.Get())
     {
         response.transportError = MapLastError(GetLastError());
@@ -137,8 +160,14 @@ HttpResponse WinHttpTransport::Get(std::wstring_view host, std::wstring_view pat
 
     std::wstring tokenWide = Utf8ToWide(accessToken);
     std::wstring accountWide = Utf8ToWide(accountId);
-    std::wstring headers = L"Authorization: Bearer " + tokenWide + L"\r\nAccept: application/json\r\n";
-    if (!accountWide.empty()) headers += L"ChatGPT-Account-Id: " + accountWide + L"\r\n";
+    std::wstring headers = destination->rawAuthorization
+        ? L"Authorization: " + tokenWide
+            + L"\r\nAccept: application/json\r\nAccept-Language: en-US,en\r\n"
+        : L"Authorization: Bearer " + tokenWide + L"\r\nAccept: application/json\r\n";
+    if (!destination->rawAuthorization && !accountWide.empty())
+    {
+        headers += L"ChatGPT-Account-Id: " + accountWide + L"\r\n";
+    }
     const bool headersAdded = WinHttpAddRequestHeaders(request.Get(), headers.c_str(),
         static_cast<DWORD>(headers.size()), WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE) != FALSE;
     ClearSensitive(tokenWide);

@@ -102,7 +102,9 @@ int App::Run(HINSTANCE instance)
 
     settingsPath_ = Settings::DefaultPath();
     settings_ = Settings::Load(settingsPath_);
+    state_.activeProvider = settings_.activeProvider;
     authPaths_ = CodexAuthReader::BuildSearchPathsFromEnvironment();
+    zhipuAuthPaths_ = ZhipuAuthReader::BuildSearchPathsFromEnvironment();
     taskbarCreatedMessage_ = RegisterWindowMessageW(L"TaskbarCreated");
     controller_ = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kControllerClass,
         L"CodexQuotaTaskbar Controller", WS_POPUP, 0, 0, 0, 0,
@@ -146,9 +148,15 @@ int App::Run(HINSTANCE instance)
 
     SetTimer(controller_, kCountdownTimer, 1000, nullptr);
     SetTimer(controller_, kValidationTimer, kNormalValidationInterval, nullptr);
-    refreshController_.Start(authPaths_, settings_.refreshIntervalSeconds,
+    refreshController_.Start(authPaths_, zhipuAuthPaths_, settings_.activeProvider,
+        settings_.refreshIntervalSeconds,
         [this] { if (controller_) PostMessageW(controller_, kQuotaUpdated, 0, 0); });
-    static_cast<void>(authWatcher_.Start(authPaths_, [this] { refreshController_.NotifyCredentialsChanged(); }));
+    // 同一个监听器同时覆盖 Codex auth.json 与智谱 settings.json 候选；任一文件
+    // 变化只唤醒刷新状态机，实际读取哪个凭证由当前激活来源决定。
+    AuthSearchPaths watchedPaths = authPaths_;
+    watchedPaths.candidates.insert(watchedPaths.candidates.end(),
+        zhipuAuthPaths_.candidates.begin(), zhipuAuthPaths_.candidates.end());
+    static_cast<void>(authWatcher_.Start(watchedPaths, [this] { refreshController_.NotifyCredentialsChanged(); }));
     UpdatePresentation();
 
     MSG message{};
@@ -591,6 +599,20 @@ void App::HandleCommand(UINT command)
     switch (command)
     {
     case CommandRefresh: static_cast<void>(refreshController_.RequestManualRefresh()); break;
+    case CommandProviderCodex:
+    case CommandProviderZhipu:
+    {
+        const QuotaProvider provider = command == CommandProviderZhipu
+            ? QuotaProvider::Zhipu : QuotaProvider::Codex;
+        if (settings_.activeProvider != provider)
+        {
+            settings_.activeProvider = provider;
+            state_.activeProvider = provider;
+            refreshController_.SetActiveProvider(provider);
+            settingsChanged = true;
+        }
+        break;
+    }
     case CommandLayoutVertical: settings_.layout = LayoutMode::Vertical; settingsChanged = true; break;
     case CommandLayoutHorizontal: settings_.layout = LayoutMode::Horizontal; settingsChanged = true; break;
     case CommandShowFiveHour:
@@ -644,17 +666,29 @@ void App::ApplyRefreshResult()
     if (shuttingDown_) return;
     std::optional<RefreshResult> result = refreshController_.TakePendingResult();
     if (!result) return;
-    state_.latestUsageAttempt = result->usage;
-    state_.latestResetCreditsAttempt = result->resetCredits;
-    if (result->usage.success)
+    if (result->provider == QuotaProvider::Zhipu)
     {
-        state_.lastSuccessfulUsage = result->usage;
-        state_.hasSuccessfulUsageData = true;
+        state_.latestZhipuAttempt = result->zhipuUsage;
+        if (result->zhipuUsage.success)
+        {
+            state_.lastSuccessfulZhipuUsage = result->zhipuUsage;
+            state_.hasSuccessfulZhipuData = true;
+        }
     }
-    if (result->resetCredits.success)
+    else
     {
-        state_.lastSuccessfulResetCredits = result->resetCredits;
-        state_.hasSuccessfulResetCreditsData = true;
+        state_.latestUsageAttempt = result->usage;
+        state_.latestResetCreditsAttempt = result->resetCredits;
+        if (result->usage.success)
+        {
+            state_.lastSuccessfulUsage = result->usage;
+            state_.hasSuccessfulUsageData = true;
+        }
+        if (result->resetCredits.success)
+        {
+            state_.lastSuccessfulResetCredits = result->resetCredits;
+            state_.hasSuccessfulResetCreditsData = true;
+        }
     }
     UpdatePresentation();
 }
@@ -665,7 +699,7 @@ void App::UpdatePresentation()
     state_.refreshing = refreshController_.IsRefreshing();
     taskbarWindow_.Update(
         BuildTaskbarRenderModel(state_, settings_),
-        BuildTooltipText(state_, authPaths_, UnixNow()));
+        BuildTooltipText(state_, authPaths_, zhipuAuthPaths_, UnixNow()));
 }
 
 void App::SaveSettings()
