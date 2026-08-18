@@ -1,0 +1,15 @@
+{
+  "data": {
+    "limits": [
+      {
+        "type": "TOKENS_LIMIT",
+        "percentage": 20.0,
+        "nextResetTime": 1893542400
+      },
+      {
+        "type": "TOKENS_LIMIT",
+        "percentage": 60.0
+      }
+    ]
+  }
+}

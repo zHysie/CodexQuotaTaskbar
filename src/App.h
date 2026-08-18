@@ -10,6 +10,8 @@
 #include "usage/CodexUsageClient.h"
 #include "usage/RefreshController.h"
 #include "usage/WinHttpTransport.h"
+#include "usage/ZhipuAuthReader.h"
+#include "usage/ZhipuUsageClient.h"
 
 #include <windows.h>
 
@@ -68,14 +70,17 @@ private:
     std::filesystem::path settingsPath_;
     AppState state_;
     AuthSearchPaths authPaths_;
+    ZhipuAuthSearchPaths zhipuAuthPaths_;
     TaskbarProbeResult currentProbe_;
     SingleInstanceGuard instanceGuard_;
     TaskbarHost host_;
     TaskbarWindow taskbarWindow_;
     CodexAuthReader authReader_;
+    ZhipuAuthReader zhipuAuthReader_;
     WinHttpTransport transport_;
     CodexUsageClient usageClient_{transport_};
-    RefreshController refreshController_{authReader_, usageClient_};
+    ZhipuUsageClient zhipuUsageClient_{transport_};
+    RefreshController refreshController_{authReader_, usageClient_, zhipuAuthReader_, zhipuUsageClient_};
     AuthFileWatcher authWatcher_;
 };
 

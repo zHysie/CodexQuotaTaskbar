@@ -20,13 +20,15 @@ UINT ContextMenu::Show(HWND owner, int screenX, int screenY,
                        const SettingsData& settings, bool startupEnabled)
 {
     HMENU root = CreatePopupMenu();
+    HMENU provider = CreatePopupMenu();
     HMENU layout = CreatePopupMenu();
     HMENU content = CreatePopupMenu();
     HMENU interval = CreatePopupMenu();
     HMENU color = CreatePopupMenu();
-    if (!root || !layout || !content || !interval || !color)
+    if (!root || !provider || !layout || !content || !interval || !color)
     {
         if (root) DestroyMenu(root);
+        if (provider) DestroyMenu(provider);
         if (layout) DestroyMenu(layout);
         if (content) DestroyMenu(content);
         if (interval) DestroyMenu(interval);
@@ -34,6 +36,11 @@ UINT ContextMenu::Show(HWND owner, int screenX, int screenY,
         return 0;
     }
     AppendMenuW(root, MF_STRING, CommandRefresh, L"立即刷新");
+    AddChecked(provider, CommandProviderCodex, L"Codex（ChatGPT 登录）",
+               settings.activeProvider == QuotaProvider::Codex);
+    AddChecked(provider, CommandProviderZhipu, L"智谱 GLM（Claude Code 配置）",
+               settings.activeProvider == QuotaProvider::Zhipu);
+    AppendMenuW(root, MF_POPUP, reinterpret_cast<UINT_PTR>(provider), L"额度来源");
     AddChecked(layout, CommandLayoutVertical, L"上下两行", settings.layout == LayoutMode::Vertical);
     AddChecked(layout, CommandLayoutHorizontal, L"单行", settings.layout == LayoutMode::Horizontal);
     AppendMenuW(root, MF_POPUP, reinterpret_cast<UINT_PTR>(layout), L"显示模式");

@@ -58,6 +58,11 @@ const char* ColorName(cqt::ColorMode mode)
     }
 }
 
+const char* ProviderName(cqt::QuotaProvider provider)
+{
+    return provider == cqt::QuotaProvider::Zhipu ? "Zhipu" : "Codex";
+}
+
 } // namespace
 
 namespace cqt
@@ -126,6 +131,12 @@ SettingsData Settings::Load(const std::filesystem::path& path)
         else if (iterator->second == "Black") settings.colorMode = ColorMode::Black;
         else settings.colorMode = ColorMode::QuotaAware;
     }
+    // SchemaVersion<3 的旧配置没有该键，缺省 Codex 保持历史行为。
+    if (const auto iterator = values.find("ActiveProvider"); iterator != values.end())
+    {
+        settings.activeProvider = iterator->second == "Zhipu"
+            ? QuotaProvider::Zhipu : QuotaProvider::Codex;
+    }
     return Normalize(settings);
 }
 
@@ -154,7 +165,8 @@ bool Settings::Save(const std::filesystem::path& path, const SettingsData& input
              << "ShowFiveHour=" << (settings.showFiveHour ? 1 : 0) << "\r\n"
              << "ShowWeekly=" << (settings.showWeekly ? 1 : 0) << "\r\n"
              << "ShowSingleQuotaLabel=" << (settings.showSingleQuotaLabel ? 1 : 0) << "\r\n"
-             << "ColorMode=" << ColorName(settings.colorMode) << "\r\n";
+             << "ColorMode=" << ColorName(settings.colorMode) << "\r\n"
+             << "ActiveProvider=" << ProviderName(settings.activeProvider) << "\r\n";
         if (!file)
         {
             error = L"无法完整写入设置。";

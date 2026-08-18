@@ -71,6 +71,86 @@ const wchar_t* FailureHeading(const cqt::UsageSnapshot& snapshot)
     return L"Codex 额度数据暂时无法更新";
 }
 
+bool ZhipuAuthenticationMissing(const cqt::ZhipuUsageSnapshot& snapshot)
+{
+    return snapshot.errorCode == "ZHIPU_AUTH_NOT_FOUND"
+        || snapshot.errorCode == "ZHIPU_AUTH_TOKEN_MISSING"
+        || snapshot.errorCode == "ZHIPU_BASE_URL_UNSUPPORTED";
+}
+
+bool ZhipuAuthenticationInvalid(const cqt::ZhipuUsageSnapshot& snapshot)
+{
+    return snapshot.httpStatusCode == 401 || snapshot.httpStatusCode == 403;
+}
+
+const wchar_t* ZhipuFailureHeading(const cqt::ZhipuUsageSnapshot& snapshot)
+{
+    if (snapshot.errorCode == "HTTP_TIMEOUT"
+        || snapshot.errorCode == "ZHIPU_HTTP_TIMEOUT"
+        || snapshot.errorCode == "HTTP_REQUEST_FAILED"
+        || snapshot.errorCode == "HTTP_CONNECT_FAILED"
+        || snapshot.errorCode == "HTTP_NETWORK_FAILED"
+        || snapshot.errorCode == "ZHIPU_NETWORK_FAILED"
+        || snapshot.errorCode == "HTTP_BODY_READ_FAILED")
+        return L"当前网络刷新失败";
+    if (snapshot.httpStatusCode == 429 || snapshot.httpStatusCode >= 500)
+        return L"智谱额度服务暂不可用";
+    return L"智谱额度数据暂时无法更新";
+}
+
+void AppendZhipuTooltip(std::wostringstream& tooltip, const cqt::AppState& state,
+                        const cqt::ZhipuAuthSearchPaths& zhipuAuthPaths, long long now)
+{
+    tooltip << L"智谱 GLM 额度\r\n\r\n";
+    if (ZhipuAuthenticationMissing(state.latestZhipuAttempt))
+    {
+        if (state.latestZhipuAttempt.errorCode == "ZHIPU_BASE_URL_UNSUPPORTED")
+        {
+            tooltip << L"当前 Claude 配置的不是智谱服务。\r\n\r\n"
+                    << L"ANTHROPIC_BASE_URL 未指向 bigmodel.cn 或 z.ai，无法查询智谱额度。\r\n";
+        }
+        else
+        {
+            tooltip << L"未找到智谱配置。\r\n\r\n"
+                    << L"请先在 Claude Code（或其供应商切换工具）中配置智谱 API Key。\r\n查找路径：\r\n";
+            for (const auto& path : zhipuAuthPaths.candidates) tooltip << path.wstring() << L"\r\n";
+        }
+    }
+    else if (ZhipuAuthenticationInvalid(state.latestZhipuAttempt))
+    {
+        tooltip << L"智谱 API Key 已失效。\r\n\r\n"
+                << L"请检查智谱 API Key 是否有效，然后右键选择「立即刷新」。\r\n";
+    }
+    else if (state.hasSuccessfulZhipuData)
+    {
+        AppendUsageWindow(tooltip, L"5 小时额度", state.lastSuccessfulZhipuUsage.fiveHour, now);
+        tooltip << L"\r\n";
+        AppendUsageWindow(tooltip, L"周额度", state.lastSuccessfulZhipuUsage.weekly, now);
+        tooltip << L"\r\n";
+        if (state.lastSuccessfulZhipuUsage.monthlyMcpAvailable)
+        {
+            tooltip << L"月度 MCP 用量：已用 "
+                    << std::to_wstring(static_cast<int>(std::lround(
+                           state.lastSuccessfulZhipuUsage.monthlyMcpUsedPercent)))
+                    << L"%\r\n\r\n";
+        }
+        tooltip << L"最后更新："
+                << FormatLocalTime(state.lastSuccessfulZhipuUsage.fetchedAtUnixSeconds, L"%H:%M:%S")
+                << L"\r\n";
+        if (!state.latestZhipuAttempt.success && !state.latestZhipuAttempt.errorCode.empty())
+            tooltip << L"\r\n" << ZhipuFailureHeading(state.latestZhipuAttempt)
+                    << L"，显示的是 "
+                    << FormatLocalTime(state.lastSuccessfulZhipuUsage.fetchedAtUnixSeconds, L"%H:%M:%S")
+                    << L" 获取的旧数据。\r\n错误："
+                    << state.latestZhipuAttempt.errorMessage << L"\r\n";
+    }
+    else if (!state.latestZhipuAttempt.errorMessage.empty())
+    {
+        tooltip << state.latestZhipuAttempt.errorMessage << L"\r\n";
+    }
+    else tooltip << L"正在准备首次刷新。\r\n";
+}
+
 } // namespace
 
 namespace cqt
@@ -79,8 +159,17 @@ namespace cqt
 std::wstring BuildTooltipText(
     const AppState& state,
     const AuthSearchPaths& authPaths,
+    const ZhipuAuthSearchPaths& zhipuAuthPaths,
     long long nowUnixSeconds)
 {
+    if (state.activeProvider == QuotaProvider::Zhipu)
+    {
+        std::wostringstream tooltip;
+        AppendZhipuTooltip(tooltip, state, zhipuAuthPaths, nowUnixSeconds);
+        if (state.refreshing) tooltip << L"\r\n正在刷新";
+        return tooltip.str();
+    }
+
     std::wostringstream tooltip;
     tooltip << L"Codex 额度\r\n\r\n";
     if (AuthenticationMissing(state.latestUsageAttempt))

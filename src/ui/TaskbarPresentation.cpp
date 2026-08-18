@@ -22,6 +22,18 @@ bool AuthenticationInvalid(const cqt::UsageSnapshot& snapshot)
     return snapshot.httpStatusCode == 401 || snapshot.httpStatusCode == 403;
 }
 
+bool ZhipuAuthenticationMissing(const cqt::ZhipuUsageSnapshot& snapshot)
+{
+    return snapshot.errorCode == "ZHIPU_AUTH_NOT_FOUND"
+        || snapshot.errorCode == "ZHIPU_AUTH_TOKEN_MISSING"
+        || snapshot.errorCode == "ZHIPU_BASE_URL_UNSUPPORTED";
+}
+
+bool ZhipuAuthenticationInvalid(const cqt::ZhipuUsageSnapshot& snapshot)
+{
+    return snapshot.httpStatusCode == 401 || snapshot.httpStatusCode == 403;
+}
+
 } // namespace
 
 namespace cqt
@@ -37,6 +49,34 @@ TaskbarRenderModel BuildTaskbarRenderModel(
     model.showWeekly = settings.showWeekly;
     model.showSingleQuotaLabel = settings.showSingleQuotaLabel;
     model.colorMode = settings.colorMode;
+
+    if (state.activeProvider == QuotaProvider::Zhipu)
+    {
+        if (ZhipuAuthenticationMissing(state.latestZhipuAttempt))
+        {
+            model.statusText = L"GLM --";
+            return model;
+        }
+        if (ZhipuAuthenticationInvalid(state.latestZhipuAttempt))
+        {
+            model.statusText = L"GLM !";
+            return model;
+        }
+        if (!state.hasSuccessfulZhipuData)
+        {
+            model.statusText = state.latestZhipuAttempt.errorCode.empty() ? L"GLM …" : L"GLM ?";
+            return model;
+        }
+        model.fiveHour = Percent(state.lastSuccessfulZhipuUsage.fiveHour);
+        model.weekly = Percent(state.lastSuccessfulZhipuUsage.weekly);
+        if (state.lastSuccessfulZhipuUsage.fiveHour.available)
+            model.fiveHourRemaining = state.lastSuccessfulZhipuUsage.fiveHour.remainingPercent;
+        if (state.lastSuccessfulZhipuUsage.weekly.available)
+            model.weeklyRemaining = state.lastSuccessfulZhipuUsage.weekly.remainingPercent;
+        model.warningMarker = !state.latestZhipuAttempt.success
+            && !state.latestZhipuAttempt.errorCode.empty();
+        return model;
+    }
 
     if (AuthenticationMissing(state.latestUsageAttempt))
     {

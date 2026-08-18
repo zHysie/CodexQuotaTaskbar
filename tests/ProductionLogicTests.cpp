@@ -4,11 +4,14 @@
 #include "usage/CodexAuthReader.h"
 #include "usage/CodexUsageClient.h"
 #include "usage/RefreshController.h"
+#include "usage/ZhipuAuthReader.h"
+#include "usage/ZhipuUsageClient.h"
 
 #include <windows.h>
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <filesystem>
@@ -209,6 +212,43 @@ private:
     std::atomic<int> resetCalls_ = 0;
 };
 
+class ProviderSwitchTransport final : public cqt::IHttpTransport
+{
+public:
+    cqt::HttpResponse Get(std::wstring_view, std::wstring_view path,
+                          std::string_view, std::string_view) override
+    {
+        cqt::HttpResponse response;
+        response.statusCode = 200;
+        if (path == L"/api/monitor/usage/quota/limit")
+        {
+            ++zhipuCalls_;
+            response.body = R"({"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"percentage":25,"nextResetTime":1893456000000},{"type":"TOKENS_LIMIT","unit":6,"percentage":50,"nextResetTime":1893456000000}]}})";
+        }
+        else if (path == L"/backend-api/wham/usage")
+        {
+            ++usageCalls_;
+            response.body = R"({"rate_limit":{"primary_window":{"used_percent":25,"limit_window_seconds":604800},"secondary_window":{"used_percent":10,"limit_window_seconds":18000}}})";
+        }
+        else
+        {
+            ++resetCalls_;
+            response.body = R"({"available_count":0,"credits":[]})";
+        }
+        return response;
+    }
+
+    void Cancel() override {}
+    int UsageCalls() const { return usageCalls_.load(); }
+    int ResetCalls() const { return resetCalls_.load(); }
+    int ZhipuCalls() const { return zhipuCalls_.load(); }
+
+private:
+    std::atomic<int> usageCalls_ = 0;
+    std::atomic<int> resetCalls_ = 0;
+    std::atomic<int> zhipuCalls_ = 0;
+};
+
 void TestSettings(const std::filesystem::path& root)
 {
     const auto path = root / L"settings" / L"settings.ini";
@@ -218,6 +258,8 @@ void TestSettings(const std::filesystem::path& root)
           "schema 1 settings upgrade to current schema");
     Check(settings.showSingleQuotaLabel,
           "schema 1 settings without single-quota label key keep labels visible");
+    Check(settings.activeProvider == cqt::QuotaProvider::Codex,
+          "schema 1 settings without provider key default to codex");
     Check(settings.refreshIntervalSeconds == 180, "settings invalid interval defaults");
     Check(settings.showFiveHour && settings.showWeekly, "settings cannot hide both quotas");
     Check(settings.colorMode == cqt::ColorMode::QuotaAware, "settings unknown color defaults");
@@ -231,18 +273,26 @@ void TestSettings(const std::filesystem::path& root)
     settings.layout = cqt::LayoutMode::Horizontal;
     settings.refreshIntervalSeconds = 600;
     settings.showSingleQuotaLabel = false;
+    settings.activeProvider = cqt::QuotaProvider::Zhipu;
     std::wstring error;
     Check(cqt::Settings::Save(path, settings, error), "settings atomic save");
     const std::string savedSettings = Read(path);
-    Check(savedSettings.find("SchemaVersion=2\r\n") != std::string::npos
+    Check(savedSettings.find("SchemaVersion=3\r\n") != std::string::npos
           && savedSettings.find("ShowSingleQuotaLabel=0\r\n") != std::string::npos,
-          "settings file writes schema 2 and hidden single-quota label preference");
+          "settings file writes current schema and hidden single-quota label preference");
+    Check(savedSettings.find("ActiveProvider=Zhipu\r\n") != std::string::npos,
+          "settings file writes active provider");
     const auto loaded = cqt::Settings::Load(path);
-    Check(loaded.schemaVersion == 2
+    Check(loaded.schemaVersion == 3
           && loaded.layout == cqt::LayoutMode::Horizontal
           && loaded.refreshIntervalSeconds == 600
           && !loaded.showSingleQuotaLabel,
-          "schema 2 settings persist single-quota label preference");
+          "schema settings persist single-quota label preference");
+    Check(loaded.activeProvider == cqt::QuotaProvider::Zhipu,
+          "zhipu provider preference persists");
+    Write(path, "[General]\nSchemaVersion=3\nActiveProvider=Unexpected\n");
+    Check(cqt::Settings::Load(path).activeProvider == cqt::QuotaProvider::Codex,
+          "unknown provider value falls back to codex");
 
     cqt::SettingsData singleFiveHour;
     singleFiveHour.showWeekly = false;
@@ -376,12 +426,15 @@ void TestRefreshController(const std::filesystem::path& root)
     Write(authPath, R"({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})");
     BlockingFakeTransport transport;
     cqt::CodexUsageClient client(transport);
+    cqt::ZhipuUsageClient zhipuClient(transport);
     cqt::CodexAuthReader reader;
-    cqt::RefreshController controller(reader, client);
+    cqt::ZhipuAuthReader zhipuReader;
+    cqt::RefreshController controller(reader, client, zhipuReader, zhipuClient);
     std::mutex mutex;
     std::condition_variable condition;
     bool ready = false;
-    controller.Start(cqt::AuthSearchPaths{{authPath}}, 180, [&] {
+    controller.Start(cqt::AuthSearchPaths{{authPath}}, cqt::ZhipuAuthSearchPaths{},
+                     cqt::QuotaProvider::Codex, 180, [&] {
         std::scoped_lock lock(mutex);
         ready = true;
         condition.notify_all();
@@ -406,12 +459,15 @@ void TestNetworkRecovery(const std::filesystem::path& root)
     Write(authPath, R"({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})");
     RecoveringFakeTransport transport;
     cqt::CodexUsageClient client(transport);
+    cqt::ZhipuUsageClient zhipuClient(transport);
     cqt::CodexAuthReader reader;
-    cqt::RefreshController controller(reader, client);
+    cqt::ZhipuAuthReader zhipuReader;
+    cqt::RefreshController controller(reader, client, zhipuReader, zhipuClient);
     std::mutex mutex;
     std::condition_variable condition;
     int callbacks = 0;
-    controller.Start(cqt::AuthSearchPaths{{authPath}}, 180, [&] {
+    controller.Start(cqt::AuthSearchPaths{{authPath}}, cqt::ZhipuAuthSearchPaths{},
+                     cqt::QuotaProvider::Codex, 180, [&] {
         std::scoped_lock lock(mutex);
         ++callbacks;
         condition.notify_all();
@@ -445,12 +501,15 @@ void TestCredentialChangesCoalesce(const std::filesystem::path& root)
     Write(authPath, R"({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})");
     BlockingFakeTransport transport;
     cqt::CodexUsageClient client(transport);
+    cqt::ZhipuUsageClient zhipuClient(transport);
     cqt::CodexAuthReader reader;
-    cqt::RefreshController controller(reader, client);
+    cqt::ZhipuAuthReader zhipuReader;
+    cqt::RefreshController controller(reader, client, zhipuReader, zhipuClient);
     std::mutex mutex;
     std::condition_variable condition;
     int callbacks = 0;
-    controller.Start(cqt::AuthSearchPaths{{authPath}}, 180, [&] {
+    controller.Start(cqt::AuthSearchPaths{{authPath}}, cqt::ZhipuAuthSearchPaths{},
+                     cqt::QuotaProvider::Codex, 180, [&] {
         std::scoped_lock lock(mutex);
         ++callbacks;
         condition.notify_all();
@@ -476,12 +535,15 @@ void TestBackoffAndRetryAfter(const std::filesystem::path& root)
     Write(authPath, R"({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})");
     BackoffFakeTransport transport;
     cqt::CodexUsageClient client(transport);
+    cqt::ZhipuUsageClient zhipuClient(transport);
     cqt::CodexAuthReader reader;
-    cqt::RefreshController controller(reader, client);
+    cqt::ZhipuAuthReader zhipuReader;
+    cqt::RefreshController controller(reader, client, zhipuReader, zhipuClient);
     std::mutex mutex;
     std::condition_variable condition;
     int callbacks = 0;
-    controller.Start(cqt::AuthSearchPaths{{authPath}}, 180, [&] {
+    controller.Start(cqt::AuthSearchPaths{{authPath}}, cqt::ZhipuAuthSearchPaths{},
+                     cqt::QuotaProvider::Codex, 180, [&] {
         std::scoped_lock lock(mutex);
         ++callbacks;
         condition.notify_all();
@@ -512,12 +574,15 @@ void TestResetRateLimitIsolation(const std::filesystem::path& root)
     Write(authPath, R"({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})");
     ResetRateLimitedTransport transport;
     cqt::CodexUsageClient client(transport);
+    cqt::ZhipuUsageClient zhipuClient(transport);
     cqt::CodexAuthReader reader;
-    cqt::RefreshController controller(reader, client);
+    cqt::ZhipuAuthReader zhipuReader;
+    cqt::RefreshController controller(reader, client, zhipuReader, zhipuClient);
     std::mutex mutex;
     std::condition_variable condition;
     int callbacks = 0;
-    controller.Start(cqt::AuthSearchPaths{{authPath}}, 180, [&] {
+    controller.Start(cqt::AuthSearchPaths{{authPath}}, cqt::ZhipuAuthSearchPaths{},
+                     cqt::QuotaProvider::Codex, 180, [&] {
         std::scoped_lock lock(mutex);
         ++callbacks;
         condition.notify_all();
@@ -541,15 +606,66 @@ void TestResetRateLimitIsolation(const std::filesystem::path& root)
     controller.Stop();
 }
 
+void TestProviderSwitch(const std::filesystem::path& root)
+{
+    const auto directory = root / L"provider-switch";
+    const auto authPath = directory / L"auth.json";
+    Write(authPath, R"({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})");
+    const auto zhipuSettingsPath = directory / L"claude" / L"settings.json";
+    Write(zhipuSettingsPath,
+        R"({"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-zhipu-key","ANTHROPIC_BASE_URL":"https://open.bigmodel.cn/api/anthropic"}})");
+    ProviderSwitchTransport transport;
+    cqt::CodexUsageClient client(transport);
+    cqt::ZhipuUsageClient zhipuClient(transport);
+    cqt::CodexAuthReader reader;
+    cqt::ZhipuAuthReader zhipuReader;
+    cqt::RefreshController controller(reader, client, zhipuReader, zhipuClient);
+    std::mutex mutex;
+    std::condition_variable condition;
+    int callbacks = 0;
+    const auto waitFor = [&](int expected) {
+        std::unique_lock lock(mutex);
+        return condition.wait_for(lock, std::chrono::seconds(3), [&] { return callbacks >= expected; });
+    };
+    controller.Start(cqt::AuthSearchPaths{{authPath}},
+                     cqt::ZhipuAuthSearchPaths{{zhipuSettingsPath}},
+                     cqt::QuotaProvider::Codex, 180, [&] {
+                         std::scoped_lock lock(mutex);
+                         ++callbacks;
+                         condition.notify_all();
+                     });
+
+    Check(waitFor(1), "provider switch initial codex callback");
+    auto result = controller.TakePendingResult();
+    Check(result && result->provider == cqt::QuotaProvider::Codex && result->usage.success,
+          "codex cycle refreshes codex subresults");
+    Check(transport.UsageCalls() == 1 && transport.ResetCalls() == 1 && transport.ZhipuCalls() == 0,
+          "codex cycle does not touch the zhipu endpoint");
+
+    controller.SetActiveProvider(cqt::QuotaProvider::Zhipu);
+    Check(waitFor(2), "provider switch triggers zhipu refresh");
+    result = controller.TakePendingResult();
+    Check(result && result->provider == cqt::QuotaProvider::Zhipu && result->zhipuUsage.success,
+          "zhipu cycle refreshes zhipu quota");
+    Check(result && std::fabs(result->zhipuUsage.fiveHour.remainingPercent - 75.0) < 0.001,
+          "zhipu quota result carries parsed windows");
+    Check(transport.UsageCalls() == 1 && transport.ResetCalls() == 1 && transport.ZhipuCalls() == 1,
+          "zhipu cycle does not touch codex endpoints");
+    controller.Stop();
+}
+
 void TestStopCancelsActiveRequest(const std::filesystem::path& root)
 {
     const auto authPath = root / L"stop" / L"auth.json";
     Write(authPath, R"({"tokens":{"access_token":"fixture-token","account_id":"fixture-account"}})");
     BlockingFakeTransport transport;
     cqt::CodexUsageClient client(transport);
+    cqt::ZhipuUsageClient zhipuClient(transport);
     cqt::CodexAuthReader reader;
-    cqt::RefreshController controller(reader, client);
-    controller.Start(cqt::AuthSearchPaths{{authPath}}, 180, [] {});
+    cqt::ZhipuAuthReader zhipuReader;
+    cqt::RefreshController controller(reader, client, zhipuReader, zhipuClient);
+    controller.Start(cqt::AuthSearchPaths{{authPath}}, cqt::ZhipuAuthSearchPaths{},
+                     cqt::QuotaProvider::Codex, 180, [] {});
     Check(transport.WaitEntered(), "stop test enters active request");
     const auto started = std::chrono::steady_clock::now();
     controller.Stop();
@@ -571,6 +687,7 @@ int main()
     TestCredentialChangesCoalesce(root);
     TestBackoffAndRetryAfter(root);
     TestResetRateLimitIsolation(root);
+    TestProviderSwitch(root);
     TestStopCancelsActiveRequest(root);
     std::filesystem::remove_all(root);
     std::printf("production logic summary: failures=%d\n", failures);

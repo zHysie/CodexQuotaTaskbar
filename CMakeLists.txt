@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(CodexQuotaTaskbar VERSION 0.1.7 LANGUAGES CXX RC)
+project(CodexQuotaTaskbar VERSION 0.1.8 LANGUAGES CXX RC)
 
 enable_testing()
 
@@ -41,6 +41,12 @@ add_library(data_core STATIC
     src/usage/UsageParser.h
     src/usage/WinHttpTransport.cpp
     src/usage/WinHttpTransport.h
+    src/usage/ZhipuAuthReader.cpp
+    src/usage/ZhipuAuthReader.h
+    src/usage/ZhipuUsageClient.cpp
+    src/usage/ZhipuUsageClient.h
+    src/usage/ZhipuUsageParser.cpp
+    src/usage/ZhipuUsageParser.h
 )
 
 target_compile_features(data_core PUBLIC cxx_std_20)

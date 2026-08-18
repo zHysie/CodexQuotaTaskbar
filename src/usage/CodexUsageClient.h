@@ -9,13 +9,6 @@
 namespace cqt
 {
 
-template <typename Snapshot>
-struct EndpointFetchResult
-{
-    Snapshot snapshot;
-    std::optional<long long> retryAfterSeconds;
-};
-
 class CodexUsageClient
 {
 public:

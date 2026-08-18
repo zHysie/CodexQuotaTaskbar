@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -25,6 +26,13 @@ struct HttpResponse
     std::map<std::wstring, std::wstring, std::less<>> headers;
     TransportError transportError = TransportError::None;
     std::string errorCode;
+};
+
+template <typename Snapshot>
+struct EndpointFetchResult
+{
+    Snapshot snapshot;
+    std::optional<long long> retryAfterSeconds;
 };
 
 class IHttpTransport

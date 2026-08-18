@@ -46,18 +46,50 @@ struct ResetCreditsSnapshot
     int httpStatusCode = 0;
 };
 
+struct ZhipuUsageSnapshot
+{
+    bool success = false;
+
+    UsageWindow fiveHour;
+    UsageWindow weekly;
+
+    bool monthlyMcpAvailable = false;
+    double monthlyMcpUsedPercent = 0.0;
+
+    long long fetchedAtUnixSeconds = 0;
+
+    std::wstring errorMessage;
+    std::string errorCode;
+    int httpStatusCode = 0;
+};
+
+enum class QuotaProvider
+{
+    Codex,
+    Zhipu
+};
+
 struct RefreshResult
 {
+    QuotaProvider provider = QuotaProvider::Codex;
     UsageSnapshot usage;
     ResetCreditsSnapshot resetCredits;
+    ZhipuUsageSnapshot zhipuUsage;
 };
 
 struct AppState
 {
+    QuotaProvider activeProvider = QuotaProvider::Codex;
+
     UsageSnapshot lastSuccessfulUsage;
     UsageSnapshot latestUsageAttempt;
     ResetCreditsSnapshot lastSuccessfulResetCredits;
     ResetCreditsSnapshot latestResetCreditsAttempt;
+
+    ZhipuUsageSnapshot lastSuccessfulZhipuUsage;
+    ZhipuUsageSnapshot latestZhipuAttempt;
+    bool hasSuccessfulZhipuData = false;
+
     bool refreshing = false;
     bool hasSuccessfulUsageData = false;
     bool hasSuccessfulResetCreditsData = false;

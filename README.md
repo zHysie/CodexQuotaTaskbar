@@ -1,6 +1,6 @@
 # CodexQuotaTaskbar
 
-在 Windows 11 任务栏中直接查看 Codex 剩余额度，无需打开网页或额外窗口。
+在 Windows 11 任务栏中直接查看 Codex 或智谱 GLM 剩余额度，无需打开网页或额外窗口。
 
 <p align="center">
   <img src="assets/taskbar-display.png" alt="CodexQuotaTaskbar 在任务栏中显示额度" width="94">
@@ -12,13 +12,14 @@
 
 - 原生嵌入 Windows 11 主任务栏，不使用悬浮窗
 - 显示 5 小时额度与周额度，支持单行或上下两行
+- 右键菜单切换额度来源：Codex（ChatGPT 登录）或智谱 GLM（Claude Code 配置），同一时刻只显示一个来源
 - 只显示一个额度时，可选择隐藏前面的 `5h` / `1W` 标识
-- 悬停查看重置时间、可用重置次数及最早到期时间、账号套餐和最后更新时间
+- 悬停查看重置时间、可用重置次数及最早到期时间、账号套餐和最后更新时间；智谱来源额外显示月度 MCP 用量
 - 右键即可刷新、调整显示内容、刷新间隔和颜色
 - 支持当前 Windows 用户开机启动
 - 全屏游戏或截图遮罩出现时不重挂、不挪位，后台额度刷新继续
 - 与 TrafficMonitor 等任务栏工具共存时保持稳定位置，仅在持续碰撞后原位向左避让
-- 只读使用现有 Codex 登录状态，不收集遥测
+- 只读使用现有登录状态与 API Key，不收集遥测
 
 <p align="center">
   <img src="assets/taskbar-tooltip.png" alt="CodexQuotaTaskbar 悬停额度详情" width="250">
@@ -29,13 +30,13 @@
 
 ### 方式一：直接下载 EXE
 
-1. 点击 [直接下载 `CodexQuotaTaskbar-v0.1.7-win-x64.exe`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.7/CodexQuotaTaskbar-v0.1.7-win-x64.exe)。
+1. 点击 [直接下载 `CodexQuotaTaskbar-v0.1.8-win-x64.exe`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.8/CodexQuotaTaskbar-v0.1.8-win-x64.exe)。
 2. 将下载的 EXE 保存或移动到一个固定目录。
 3. 双击运行，程序会直接出现在主任务栏中。
 
 ### 方式二：下载完整压缩包
 
-1. 下载 [`CodexQuotaTaskbar-v0.1.7-win-x64.zip`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.7/CodexQuotaTaskbar-v0.1.7-win-x64.zip)。
+1. 下载 [`CodexQuotaTaskbar-v0.1.8-win-x64.zip`](https://github.com/zHysie/CodexQuotaTaskbar/releases/download/v0.1.8/CodexQuotaTaskbar-v0.1.8-win-x64.zip)。
 2. 解压到固定目录，不要直接在压缩包内运行。
 3. 双击解压后的 `CodexQuotaTaskbar.exe`。
 
@@ -47,7 +48,7 @@
 
 运行环境：Windows 11 x64，目标电脑需安装 Microsoft Visual C++ 2015–2026 x64 运行库。
 
-v0.1.7 暂无安装器、自动更新和代码签名。Windows 可能显示“未知发布者”或 SmartScreen 提示，请只从本仓库 Release 下载并核对 SHA-256。
+v0.1.8 暂无安装器、自动更新和代码签名。Windows 可能显示“未知发布者”或 SmartScreen 提示，请只从本仓库 Release 下载并核对 SHA-256。
 
 ## 使用说明
 
@@ -58,11 +59,13 @@ v0.1.7 暂无安装器、自动更新和代码签名。Windows 可能显示“�
 1W 72%
 ```
 
-悬停会显示额度重置倒计时、可用重置次数及最早到期时间（本地时间，精确到分钟）、账号、套餐和最后成功更新时间；其余到期时间不展开。左键无操作；右键可立即刷新、切换显示模式、选择显示项目、修改刷新间隔和颜色、设置开机启动、重新检测任务栏或退出。
+悬停会显示额度重置倒计时、可用重置次数及最早到期时间（本地时间，精确到分钟）、账号、套餐和最后成功更新时间；其余到期时间不展开。左键无操作；右键可立即刷新、切换额度来源、切换显示模式、选择显示项目、修改刷新间隔和颜色、设置开机启动、重新检测任务栏或退出。
+
+「额度来源」子菜单提供二选一切换：`Codex（ChatGPT 登录）` 使用本机 Codex 登录状态；`智谱 GLM（Claude Code 配置）` 使用本机 Claude Code 配置文件（`~/.claude/settings.json`，典型场景为通过 cc-switch 等供应商切换工具配置的 GLM Coding Plan）中的 API Key。任一时刻只显示一个来源的额度，也只对激活来源发起网络请求；切换立即生效并触发一次刷新，切回旧来源时先显示其缓存的最后成功数据。智谱来源显示同样的 `5h` / `1W` 两行额度与重置倒计时，Tooltip 标题为「智谱 GLM 额度」并在服务端返回时附一行月度 MCP 用量；配置缺失或 Key 失效时显示 `GLM --`、`GLM !` 等脱敏状态并在 Tooltip 说明原因。
 
 只显示一个额度时，「显示内容」子菜单中的「单项时显示标识（5h / 1W）」可选择是否显示前缀，默认开启。关闭后只留空标签列，数值和 `%` 不居中、不改变窗口宽度或 HWND；同时显示两种额度时该选项置灰，两个标签始终显示。该偏好会保存，旧版配置继续使用默认开启行为。
 
-全屏游戏、浏览器全屏或截图遮罩出现时，程序暂停任务栏软布局调整，不销毁额度窗口，也不改变其位置；后台额度刷新仍继续。任务栏由系统自动隐藏时，额度窗口随任务栏隐藏，恢复后由同一个窗口在原位置出现。TrafficMonitor 等外部任务栏工具短暂显隐或缩小时不会让额度窗口向右跳动；v0.1.7 保留 v0.1.6 对独立顶层窗口和“隐藏顶层载体 + 可见任务栏子窗”结构的识别，只有连续 3 次、每次间隔 2 秒都确认真实碰撞时才使用同一个窗口向左避让。
+全屏游戏、浏览器全屏或截图遮罩出现时，程序暂停任务栏软布局调整，不销毁额度窗口，也不改变其位置；后台额度刷新仍继续。任务栏由系统自动隐藏时，额度窗口随任务栏隐藏，恢复后由同一个窗口在原位置出现。TrafficMonitor 等外部任务栏工具短暂显隐或缩小时不会让额度窗口向右跳动；v0.1.8 保留 v0.1.6 对独立顶层窗口和“隐藏顶层载体 + 可见任务栏子窗”结构的识别，只有连续 3 次、每次间隔 2 秒都确认真实碰撞时才使用同一个窗口向左避让。
 
 麦克风等系统状态按钮使通知区临时变宽时，额度窗口仍会安全避让；按钮消失、通知区收缩后，最右安全位置连续稳定 1 秒即使用同一 HWND 自动复位。TrafficMonitor 等外部顶层工具消失仍不会触发向右回抢。
 
@@ -70,27 +73,34 @@ v0.1.7 暂无安装器、自动更新和代码签名。Windows 可能显示“�
 
 ## 隐私与数据安全
 
-程序按以下顺序只读查找登录文件：
+Codex 来源按以下顺序只读查找登录文件：
 
 1. `%CODEX_HOME%\auth.json`（仅当 `CODEX_HOME` 已设置）
 2. `%USERPROFILE%\.codex\auth.json`
 
-程序不写回或自动刷新 Token，不调用重置机会消费接口，不记录请求头、完整响应、Token 或邮箱，也不收集遥测。网络访问严格限制为：
+智谱来源按以下顺序只读查找 Claude Code 设置文件，且只读取其中 API Key 与服务站点两个配置键：
+
+1. `%CLAUDE_CONFIG_DIR%\settings.json`（仅当 `CLAUDE_CONFIG_DIR` 已设置）
+2. `%USERPROFILE%\.claude\settings.json`
+
+程序不写回或自动刷新 Token，不修改 Claude 配置，不调用重置机会消费接口，不记录请求头、完整响应、Token、API Key 或邮箱，也不收集遥测。网络访问严格限制为固定来源的只读路径，激活哪个来源就只访问哪个来源的地址：
 
 ```text
 https://chatgpt.com/backend-api/wham/usage
 https://chatgpt.com/backend-api/wham/rate-limit-reset-credits
+https://open.bigmodel.cn/api/monitor/usage/quota/limit
+https://api.z.ai/api/monitor/usage/quota/limit
 ```
 
-这两个地址属于未公开后端接口，没有长期稳定性承诺；上游接口变化时，部分额度可能暂时显示为 `--%`。
+这些地址属于未公开后端接口，没有长期稳定性承诺；上游接口变化时，部分额度可能暂时显示为 `--%`。
 
 ## 支持范围与已知限制
 
-v0.1.7 在 Windows 11 build `26200.8973`、96 DPI、单显示器 2560×1440 环境完成 VS2022 x64 Release、CTest 7/7、任务栏探针 `supported`、交互探针 21/21、稳定性探针 19/19，以及受控恢复消息后的 17 秒稳定采样。真实 TrafficMonitor 仍被识别为外部障碍，额度窗口与其保持 8 像素安全间距；正式构建门槛以 Windows 2022 / VS2022 GitHub Actions 为准。真实睡眠/唤醒尚未执行，因此本版本不能写成睡眠恢复已经通过。
+v0.1.8 在 Windows 11 build `10.0.22631.6199`、96 DPI、单显示器 1920×1080 环境完成 VS2022 x64 Release、CTest 7/7、任务栏探针 `supported`、交互探针 21/21、稳定性探针 19/19、生命周期探针 47 毫秒优雅退出，以及连续 6 次启动-优雅退出循环。智谱来源已在本机完成真实数据链路与任务栏显示验证：任务栏显示的 5 小时/周剩余百分比与同时刻智谱接口真实数据一致；Codex 来源回归显示正常。正式构建门槛以 Windows 2022 / VS2022 GitHub Actions 为准。
 
-v0.1.5 已验证的首次附着有界重试保留在 v0.1.7 中并通过对应自动化；真实注销再登录仍未执行，继续作为已接受但未实测的风险，不得理解为已经通过。明确不支持的任务栏布局和空间不足仍会立即报错。
+v0.1.7 在 Windows 11 build `26200.8973`、96 DPI、单显示器 2560×1440 环境完成同等自动化与探针验证；真实睡眠/唤醒尚未执行，不能写成通过。v0.1.5 的首次附着有界重试保留并通过自动化，但真实注销再登录仍未执行，继续作为已接受但未实测的风险。明确不支持的任务栏布局和空间不足仍会立即报错。
 
-v0.1.6 已在本机真实 TrafficMonitor 上复核托管子窗口识别与不重叠结果；v0.1.7 保留该实现并在当前桌面探针中继续识别到障碍，但全屏、截图、任务栏自动隐藏、Explorer 真实重启及其他桌面组合只有完成本版本专项后才扩大承诺，未复核部分继续保留历史结果。
+v0.1.6 已在本机真实 TrafficMonitor 上复核托管子窗口识别与不重叠结果；后续版本保留该实现，但全屏、截图、任务栏自动隐藏、Explorer 真实重启及其他桌面组合只有完成对应版本专项后才扩大承诺，未复核部分继续保留历史结果。
 
 v0.1.3 已完成 CTest 6/6、碰撞测试 32/32，并由用户在真实桌面确认麦克风状态按钮出现时安全避让、消失后约 1 秒自动复位且 HWND 保持不变。其余支持范围继续沿用下述 v0.1.2 已验证基线，未重新执行的组合不扩大承诺。
 
