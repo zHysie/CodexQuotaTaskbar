@@ -7,7 +7,10 @@ namespace cqt
 
 struct StartupAttachPolicy
 {
-    int maximumAttempts = 6;
+    // Explorer can publish Shell_TrayWnd well before TrayNotifyWnd and the
+    // task-button automation tree are ready during sign-in. Keep this wait
+    // bounded, but allow slow Windows 11 sign-ins nearly one minute to settle.
+    int maximumAttempts = 21;
     ULONGLONG firstRetryDelayMilliseconds = 1500;
     ULONGLONG laterRetryDelayMilliseconds = 3000;
 
@@ -21,6 +24,13 @@ struct StartupAttachPolicy
         return completedAttempts <= 1
             ? firstRetryDelayMilliseconds
             : laterRetryDelayMilliseconds;
+    }
+
+    [[nodiscard]] constexpr ULONGLONG MaximumWaitMilliseconds() const
+    {
+        if (maximumAttempts <= 1) return 0;
+        return firstRetryDelayMilliseconds
+            + static_cast<ULONGLONG>(maximumAttempts - 2) * laterRetryDelayMilliseconds;
     }
 };
 
