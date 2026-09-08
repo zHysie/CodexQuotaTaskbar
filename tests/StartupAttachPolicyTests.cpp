@@ -48,6 +48,10 @@ int main()
           "first startup retry delay");
     Check(cqt::kStartupAttachPolicy.DelayBeforeNextAttempt(2) == 3000,
           "later startup retry delay");
+    Check(cqt::kStartupAttachPolicy.maximumAttempts == 21,
+          "slow Windows sign-in receives twenty-one bounded attempts");
+    Check(cqt::kStartupAttachPolicy.MaximumWaitMilliseconds() == 58500,
+          "startup readiness wait remains bounded below one minute");
 
     int attempts = 0;
     std::vector<ULONGLONG> delays;
@@ -65,6 +69,25 @@ int main()
     Check(recovered && attempts == 3, "transient startup failures recover");
     Check(delays == std::vector<ULONGLONG>{1500, 3000},
           "startup recovery uses bounded staged delays");
+
+    attempts = 0;
+    delays.clear();
+    const bool lateRecovery = cqt::RunStartupAttachSequence(
+        cqt::kStartupAttachPolicy,
+        [&attempts](bool& retryable) {
+            ++attempts;
+            retryable = true;
+            return attempts == cqt::kStartupAttachPolicy.maximumAttempts;
+        },
+        [&delays](ULONGLONG delay) {
+            delays.push_back(delay);
+            return true;
+        });
+    Check(lateRecovery && attempts == cqt::kStartupAttachPolicy.maximumAttempts,
+          "slow Shell readiness can recover on the final bounded attempt");
+    Check(delays.size() == static_cast<std::size_t>(
+              cqt::kStartupAttachPolicy.maximumAttempts - 1),
+          "late recovery waits between every permitted attempt");
 
     attempts = 0;
     delays.clear();

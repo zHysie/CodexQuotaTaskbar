@@ -116,11 +116,17 @@ int App::Run(HINSTANCE instance)
         return 1;
     }
     std::wstring error;
+    bool lastAttachFailureWasTransient = false;
     const bool attached = RunStartupAttachSequence(
         kStartupAttachPolicy,
-        [this, &error](bool& retryable)
+        [this, &error, &lastAttachFailureWasTransient](bool& retryable)
         {
-            if (AttachToTaskbar(error, &retryable)) return true;
+            if (AttachToTaskbar(error, &retryable))
+            {
+                lastAttachFailureWasTransient = false;
+                return true;
+            }
+            lastAttachFailureWasTransient = retryable;
 
             // A failed SetParent or event-monitor setup may leave a partial
             // child relationship. Remove it before the next full UIA probe so
@@ -140,6 +146,12 @@ int App::Run(HINSTANCE instance)
         {
             Cleanup();
             return 0;
+        }
+        if (lastAttachFailureWasTransient)
+        {
+            if (!error.empty()) error += L"\n\n";
+            error += L"Windows 任务栏经过近一分钟重试后仍未完成初始化。"
+                     L"请稍后重新启动本程序；若持续出现，可重启 Windows 资源管理器。";
         }
         ShowError(error.empty() ? L"无法附着主任务栏。" : error, false);
         Cleanup();
